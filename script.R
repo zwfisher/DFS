@@ -277,8 +277,53 @@ ownership_pred_2020 <- predict(betaModel, opo_test)
 
 opo_test$projected_ownership <- ownership_pred_2020
 opo_test %>% ggplot(aes(x=average_ownership, y=projected_ownership)) + geom_point() + geom_abline()
-plot(betaModel)
 
-opo_test$ownership_projection_error <- opo_test$average_ownership - opo_test$projected_ownership
-hist(opo_test$ownership_projection_error)
+plot(betaModel,which=5)
+betaModel$residuals[[max(betaModel$residuals)]]
 
+df <- betaModel$fitted.values
+df <- as.data.frame(df)
+df$actual <- betaModel$y
+df$error <- df$actual - df$df
+df %>% arrange(error)
+
+# try xgboost
+library(xgboost)
+# set up data
+opo_train <- owned_players_only %>% filter(season != 2020) %>% select(average_ownership, position, salary, points.lag, l3points, lifetime_avg, l3_value, lifetime_value, home_or_away, max_ou, season_def_index, projected_points, num_games)
+opo_test <- owned_players_only %>% filter(season == 2020) %>% select(average_ownership, position, salary, points.lag, l3points, lifetime_avg, l3_value, lifetime_value, home_or_away, max_ou, season_def_index, projected_points, num_games)
+
+tr_labels <- opo_train$average_ownership
+ts_labels <- opo_test$average_ownership
+
+new_tr <- model.matrix(~.+0, data = opo_train %>% select(-average_ownership)) 
+new_ts <- model.matrix(~.+0, data = opo_test %>% select(-average_ownership))
+
+dtrain <- xgb.DMatrix(data = new_tr, label=tr_labels) 
+dtest <- xgb.DMatrix(data = new_ts, label=ts_labels)
+
+# set up params
+params <- list(booster = "gblinear", objective="reg:squaredlogerror")
+
+# cross validation
+xgbcv <- xgb.cv(params = params, 
+                 data = dtrain, 
+                 nrounds = 500, 
+                 nfold = 5, 
+                 showsd = T, 
+                 stratified = T, 
+                 print_every_n = 10, 
+                 early_stopping_rounds = 20, 
+                 maximize = FALSE)
+
+xgb1 <- xgb.train(params = params, 
+                   data = dtrain, 
+                   nrounds = 500, 
+                   watchlist = list(val=dtest,train=dtrain), 
+                   print_every_n = 10, 
+                   early_stopping_rounds = 20, 
+                   maximize = FALSE, 
+                   eval_metric = "rmse")
+
+xgbpred <- predict(xgb1, dtest)
+plot(xgbpred, ts_labels)
