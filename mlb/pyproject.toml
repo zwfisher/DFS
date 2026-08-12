@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlbdfs"
+version = "0.1.0"
+description = "MLB DFS projections, simulation, ownership and lineup optimization for DraftKings"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "pulp>=2.7",
+    "pyarrow>=12.0",
+]
+
+[project.optional-dependencies]
+data = ["pybaseball>=2.2"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+mlbdfs = "mlbdfs.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["mlbdfs*"]
+
+[tool.setuptools.package-data]
+mlbdfs = ["data/fixtures/*.csv", "data/fixtures/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
