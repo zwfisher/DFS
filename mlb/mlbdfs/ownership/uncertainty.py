@@ -52,9 +52,15 @@ def sample_ownership(
         # Dirichlet over shares within the group, rescaled to the slot count.
         shares = p / p.sum()
         alpha = np.maximum(cfg.dirichlet_concentration * shares, 1e-3)
-        draws[:, rows] = (rng.dirichlet(alpha, size=n_draws) * n_slots).astype(np.float32)
+        group = rng.dirichlet(alpha, size=n_draws) * n_slots
+        # Clipping alone would break the sum -- a group with many
+        # near-zero players gains a little mass from every one of them --
+        # so renormalize back onto the slot count afterwards.
+        group = np.clip(group, 1e-4, 1.0)
+        group *= n_slots / group.sum(axis=1, keepdims=True)
+        draws[:, rows] = group.astype(np.float32)
 
-    return np.clip(draws, 1e-4, 1.0)
+    return draws
 
 
 def ownership_interval(

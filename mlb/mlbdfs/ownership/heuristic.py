@@ -22,6 +22,8 @@ downstream needs to change.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
@@ -191,17 +193,22 @@ def implied_field_mean(ownership: pd.DataFrame) -> float:
     """Ownership-weighted sum of player projections.
 
     If the ownership vector were achievable by some distribution over legal
-    lineups, this would be the expected score of an average field lineup,
-    since ownership sums to the number of roster slots.
+    lineups, this would be exactly the expected score of an average field
+    lineup, since ownership sums to the number of roster slots.
 
-    In practice it is an **upper bound**, and comparing it against the field
-    the generator actually produces is one of the more informative checks in
-    the project. A large gap means the ownership projection is not jointly
-    feasible: there is no way to fill 50,000 legal rosters that puts every
-    chalk play at its projected rate, because the salary cap will not allow
-    it. The heuristic model in this module has exactly that problem -- it
-    prices each player independently and nothing enforces that the whole
-    slate can be afforded at once.
+    Comparing it against the field the generator actually produces is one of
+    the more informative checks in the project. A large gap means the
+    ownership projection is not jointly feasible: there is no way to fill
+    50,000 legal rosters that puts every chalk play at its projected rate,
+    because the salary cap will not allow it. The heuristic model in this
+    module has exactly that problem -- it prices each player independently
+    and nothing enforces that the whole slate can be afforded at once.
+
+    The gap is not signed. It is tempting to reason that infeasibility can
+    only cost the field points and treat this as an upper bound, but the
+    calibration that reconciles the generator to the target leaves residuals
+    in both directions, and the realized field regularly comes out slightly
+    above. Use it as a reference point, not as a bound.
 
     That is worth knowing when reading ROI numbers, and it is the strongest
     argument for replacing this model with one fitted to real contest data,
@@ -227,57 +234,91 @@ def realized_field_mean(
     return float(proj.mean())
 
 
+def field_strength_curve(
+    slate: Slate,
+    sim: SimResult,
+    temperatures: "np.ndarray | list[float] | None" = None,
+    cfg: OwnershipConfig = OWNERSHIP,
+    n_lineups: int = 2500,
+    seed: int = 0,
+) -> pd.DataFrame:
+    """Field mean score across a range of ownership temperatures.
+
+    Worth plotting once. The relationship is **not monotonic**, which is
+    easy to get wrong: the utility function is dominated by points per
+    dollar, so pushing concentration to an extreme piles ownership onto
+    cheap high-value players whose absolute projections are low, and field
+    strength falls again. It peaks somewhere in the middle.
+    """
+    if temperatures is None:
+        temperatures = np.geomspace(0.1, 12.0, 14)
+    features = build_features(slate, sim)
+
+    rows = []
+    for t in temperatures:
+        own = project_ownership(
+            slate, sim, cfg=_with_temperature(cfg, float(t)), features=features
+        )
+        rows.append(
+            {
+                "temperature": float(t),
+                "implied_mean": implied_field_mean(own),
+                "realized_mean": realized_field_mean(slate, own, n_lineups, seed),
+                "max_ownership": float(own["ownership"].max()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def calibrate_to_field_strength(
     slate: Slate,
     sim: SimResult,
     target_mean_score: float,
     cfg: OwnershipConfig = OWNERSHIP,
-    n_lineups: int = 4000,
-    tol: float = 0.4,
-    max_iter: int = 12,
+    n_lineups: int = 2500,
     seed: int = 0,
+    warn: bool = True,
 ) -> tuple[pd.DataFrame, float]:
-    """Tune ownership concentration until the field has a given mean score.
+    """Tune ownership concentration so the field has a given mean score.
 
     The conditional logit's utilities are divided by a temperature: low
-    temperature concentrates ownership onto the best plays and makes the
-    implied field strong, high temperature spreads it out and makes it weak.
-    That single parameter is the honest place to encode "how sharp is this
-    contest", and unlike the individual feature weights it can be set from
-    something observable -- the average score in the contests you enter,
-    which DraftKings reports after every slate.
-
-    The target is measured against lineups the generator actually builds
-    rather than the ownership-weighted sum, because the two differ whenever
-    the ownership projection is not jointly affordable, and it is the built
-    field that opponents' scores come from.
+    temperature concentrates ownership onto the model's favourite plays,
+    high temperature spreads it out. That single parameter is the honest
+    place to encode "how sharp is this contest", and unlike the individual
+    feature weights it can be set from something observable -- the average
+    score in the contests you enter, which DraftKings reports after every
+    slate.
 
     Calibrating matters: left alone, a diffuse ownership model implies a
     field of roughly league-average lineups, against which any competently
     optimized entry looks extraordinary and every ROI number is inflated.
 
+    Searched over a grid rather than by bisection, because field strength is
+    not monotone in temperature -- see ``field_strength_curve``. A target
+    above what the model can reach is reported rather than silently pinned
+    to the end of the range.
+
     Returns the calibrated ownership frame and the temperature used.
     """
-    features = build_features(slate, sim)
+    curve = field_strength_curve(
+        slate, sim, cfg=cfg, n_lineups=n_lineups, seed=seed
+    )
+    best = curve.iloc[(curve["realized_mean"] - target_mean_score).abs().idxmin()]
+    achieved = float(best["realized_mean"])
 
-    lo, hi = 0.05, 20.0
-    best, best_temp = None, 1.0
-    for _ in range(max_iter):
-        mid = (lo + hi) / 2
-        own = project_ownership(
-            slate, sim, cfg=_with_temperature(cfg, mid), features=features
+    if warn and abs(achieved - target_mean_score) > 1.5:
+        reachable = curve["realized_mean"]
+        logging.getLogger(__name__).warning(
+            "field strength target %.1f is outside what this slate's ownership "
+            "model can produce (reachable range %.1f to %.1f); using %.1f",
+            target_mean_score, reachable.min(), reachable.max(), achieved,
         )
-        achieved = realized_field_mean(slate, own, n_lineups=n_lineups, seed=seed)
-        best, best_temp = own, mid
-        if abs(achieved - target_mean_score) < tol:
-            break
-        # Lower temperature concentrates ownership and raises the field's
-        # mean score, so the search runs opposite to the usual direction.
-        if achieved < target_mean_score:
-            hi = mid
-        else:
-            lo = mid
-    return best, best_temp
+
+    temperature = float(best["temperature"])
+    own = project_ownership(slate, sim, cfg=_with_temperature(cfg, temperature))
+    return own, temperature
+
+
 def _with_temperature(cfg: OwnershipConfig, temperature: float) -> OwnershipConfig:
     """Copy of the config with every utility weight divided by a temperature."""
     from dataclasses import replace

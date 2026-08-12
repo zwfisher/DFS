@@ -301,7 +301,11 @@ class OwnershipConfig:
     # observable: the average score in contests you actually enter. See
     # ownership/heuristic.py for why this, and not the field sampler, is
     # what controls field strength.
-    target_field_mean_score: float | None = 102.0
+    # Left unset by default: the right value is the average score in the
+    # contests you actually enter, which is a property of your contest
+    # selection rather than something with a sensible default. Setting it
+    # turns on calibration, which costs about a dozen field generations.
+    target_field_mean_score: float | None = None
     field_stack_rate: float = 0.72
     field_stack_sizes: tuple[int, ...] = (5, 4, 3)
     field_stack_size_weights: tuple[float, ...] = (0.40, 0.35, 0.25)

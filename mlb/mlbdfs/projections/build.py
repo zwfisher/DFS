@@ -121,3 +121,66 @@ def validate_rates(matrix: np.ndarray, tol: float = 1e-6) -> None:
     sums = arr.sum(axis=1)
     if not np.allclose(sums, 1.0, atol=tol):
         raise ValueError(f"rate rows must sum to 1, got range [{sums.min()}, {sums.max()}]")
+
+
+def rate_book_from_counts(
+    batters: "pd.DataFrame",
+    pitchers: "pd.DataFrame",
+    id_map: dict[str, int] | None = None,
+    bullpens: "pd.DataFrame | None" = None,
+) -> RateBook:
+    """Build a RateBook from raw counting stats.
+
+    ``id_map`` re-keys from the MLBAM ids the data arrives with to whatever
+    ids the slate uses -- DraftKings ids, in practice. Players absent from
+    the counts fall through to league average inside ``RateBook``.
+    """
+    import pandas as pd
+
+    from .rates import COUNT_COLUMNS, shrink, steal_rates
+
+    batter_rates = shrink(batters, is_pitcher=False)
+    pitcher_rates = shrink(pitchers, is_pitcher=True)
+    steals = steal_rates(batters)
+
+    def rekey(frame: pd.DataFrame) -> dict:
+        indexed = frame.set_index("player_id")
+        values = {
+            pid: indexed.loc[pid, list(COUNT_COLUMNS)].to_numpy(dtype=np.float64)
+            for pid in indexed.index
+        }
+        if id_map is None:
+            return {str(k): v for k, v in values.items()}
+        return {
+            slate_id: values[mlbam]
+            for slate_id, mlbam in id_map.items()
+            if mlbam in values
+        }
+
+    pen: dict[str, np.ndarray] = {}
+    if bullpens is not None and not bullpens.empty:
+        pen_rates = shrink(
+            bullpens.rename(columns={"team": "player_id"}), is_pitcher=True
+        )
+        pen = {
+            str(row.player_id): np.array(
+                [getattr(row, c) for c in COUNT_COLUMNS], dtype=np.float64
+            )
+            for row in pen_rates.itertuples()
+        }
+
+    if id_map is None:
+        steal_map = {str(pid): float(v) for pid, v in steals.items()}
+    else:
+        steal_map = {
+            slate_id: float(steals[mlbam])
+            for slate_id, mlbam in id_map.items()
+            if mlbam in steals.index
+        }
+
+    return RateBook(
+        batters=rekey(batter_rates),
+        pitchers=rekey(pitcher_rates),
+        bullpens=pen,
+        steal_rates=steal_map,
+    )

@@ -25,7 +25,7 @@ from .optimize.contest import Contest, large_gpp
 from .optimize.milp import Lineup, LineupOptimizer
 from .optimize.portfolio import evaluate_lineups, select_portfolio
 from .ownership.field import Field, generate_field
-from .ownership.heuristic import project_ownership
+from .ownership.heuristic import calibrate_to_field_strength, project_ownership
 from .ownership.uncertainty import ownership_interval
 from .projections.build import RateBook, build_sim_slate
 from .sim.engine import SimResult, simulate_slate
@@ -77,7 +77,16 @@ def run_pipeline(
     holdout = simulate_slate(sim_slate, n_sims=n_sims, seed=seed + 9973)
 
     log("projecting ownership ...")
-    ownership = ownership_interval(project_ownership(slate, sim))
+    target = OWNERSHIP.target_field_mean_score
+    if target:
+        # Tie ownership concentration to how strong the opposition actually
+        # is. Skipping this leaves the field near league average, and every
+        # ROI number comes out inflated against it.
+        raw, temperature = calibrate_to_field_strength(slate, sim, target)
+        log(f"  calibrated to a field mean of {target} (temperature {temperature:.2f})")
+    else:
+        raw = project_ownership(slate, sim)
+    ownership = ownership_interval(raw)
 
     log(f"generating field of {n_field} opponent lineups ...")
     field = generate_field(slate, ownership, n_lineups=n_field, seed=seed)
