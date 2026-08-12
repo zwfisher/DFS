@@ -11,21 +11,25 @@ work and is untouched.
 
 ```bash
 cd mlb
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[data,dev]"
+uv sync --extra data --extra dev
 
-mlbdfs demo                 # whole pipeline on synthetic data, no network
-mlbdfs diagnose             # check the simulator against league aggregates
-pytest                      # 55 tests, all offline
+uv run mlbdfs demo          # whole pipeline on synthetic data, no network
+uv run mlbdfs diagnose      # check the simulator against league aggregates
+uv run pytest               # 55 tests, all offline
 ```
+
+Requires [uv](https://docs.astral.sh/uv/). `uv sync` creates `.venv` and
+installs pinned versions from `uv.lock`; drop `--extra data` if you don't
+need `pybaseball`. Prefix any command with `uv run` (or `source
+.venv/bin/activate` first) to use the project's environment.
 
 A real slate needs a DraftKings salary export:
 
 ```bash
-mlbdfs project  --slate DKSalaries.csv --date 2026-08-12
-mlbdfs optimize --slate DKSalaries.csv --date 2026-08-12 \
-                --contest large_gpp --entries 50000 --fee 5 \
-                --lineups 20 --out lineups.csv
+uv run mlbdfs project  --slate DKSalaries.csv --date 2026-08-12
+uv run mlbdfs optimize --slate DKSalaries.csv --date 2026-08-12 \
+                       --contest large_gpp --entries 50000 --fee 5 \
+                       --lineups 20 --out lineups.csv
 ```
 
 ## How it works
@@ -148,8 +152,8 @@ in contests you actually enter; without it the implied field sits near
 league average and ROI comes out inflated. Second, start logging:
 
 ```bash
-mlbdfs log-ownership --standings contest-standings.csv \
-                     --date 2026-08-12 --contest-name "MLB $5 Milly"
+uv run mlbdfs log-ownership --standings contest-standings.csv \
+                            --date 2026-08-12 --contest-name "MLB $5 Milly"
 ```
 
 DraftKings lets you download standings for any contest you entered, and
