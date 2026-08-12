@@ -267,6 +267,12 @@ class OptimizerConfig:
     require_consecutive_order: bool = True
     randomize_sigma: float = 1.0  # scale on sampled score noise for the pool
     solver_msg: bool = False
+    # Stop branch and bound once within this relative gap. The objective is
+    # a sampled draw, so proving optimality against it is precision the
+    # input does not have.
+    mip_gap: float = 0.005
+    solve_time_limit: int = 10  # seconds per lineup, a backstop not a target
+    solver_workers: int = 8
 
 
 OPTIMIZER = OptimizerConfig()
@@ -290,6 +296,12 @@ class OwnershipConfig:
     # uncertain; this is the parameter to fit once real ownership data exists.
     dirichlet_concentration: float = 140.0
     # Share of the field that stacks, and the stack size distribution.
+    # Expected mean DraftKings score of a field lineup. This is the knob
+    # that sets how concentrated ownership is, and it is set from an
+    # observable: the average score in contests you actually enter. See
+    # ownership/heuristic.py for why this, and not the field sampler, is
+    # what controls field strength.
+    target_field_mean_score: float | None = 102.0
     field_stack_rate: float = 0.72
     field_stack_sizes: tuple[int, ...] = (5, 4, 3)
     field_stack_size_weights: tuple[float, ...] = (0.40, 0.35, 0.25)
