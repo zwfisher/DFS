@@ -275,6 +275,77 @@ None of this makes running early correct. `run_pipeline` refuses a slate
 that is mostly unconfirmed unless explicitly overridden, because the right
 answer is to wait for the lineups.
 
+## Projected lineups, and why handedness is the whole model
+
+Lineups post one to three hours before first pitch. Projecting them earlier
+is worth doing, but only if it is done conditionally: **managers platoon**,
+so the useful question is not "who has started recently" but "who starts
+against a left-hander". A modal lineup taken from ten games against righties
+is confidently wrong about precisely the players a platoon decides, and
+those are the ones worth knowing about.
+
+The estimator is recency-weighted by *games* rather than days -- an off day
+should not age a lineup -- and every quantity is computed against the
+probable starter's hand, then shrunk toward the player's own overall rate.
+Start probabilities are normalized to sum to nine, since exactly nine
+hitters start. That is the same "it has to add up" discipline the ownership
+model uses, for the same reason.
+
+No new data source was needed. The starting nine are the first nine distinct
+batters a team sends up in a game, and Statcast carries `p_throws` on every
+pitch, so both the lineups and the handedness fall out of the Statcast pull
+the projections already make.
+
+### The shrinkage prior was set by measurement, and the result is lopsided
+
+Sweeping the hand prior against synthetic history with known platoon
+structure gives a clear asymmetry. When a team genuinely platoons, a heavy
+prior is about five times worse than a light one; when it does not platoon,
+a heavy prior is only marginally better. Missing a real platoon means
+rostering someone who does not play, which the contest data prices at about
+13 points. Imagining a platoon that is not there only mis-weights two
+players who both might start. So the prior is light.
+
+Two things that were assumed and turned out to be false, both caught by
+writing tests:
+
+* **The prior changes selection, not just confidence.** Shrinkage is toward
+  each player's *own* overall rate rather than a shared constant, so it is
+  not a common monotone transform across players and the projected nine can
+  change with it. The everyday core is stable; the platoon spot is exactly
+  what moves.
+* **The denominator has to respect availability.** Charging every player for
+  every team game meant a hitter promoted ten games ago was charged with the
+  twenty before he was on the roster. Because a short recent stretch is
+  often lopsided by pitcher hand, the hand-specific denominator was where it
+  bit hardest, and an everyday call-up read as a part-timer -- 0.40 where it
+  should have been 0.94. The denominator now runs back only to a player's
+  first appearance.
+
+### Handedness applies twice
+
+Which hitters are in the lineup is one question; how they hit the arm they
+are facing is another, and the second is worth more per plate appearance.
+Both are now wired: `blend_platoon` shrinks a hitter's split toward his own
+overall line rather than league average, because platoon skill is largely a
+league-level effect and individual splits are small samples.
+
+Worth noting `blend_platoon` had been written but never called, and it was
+broken -- it relied on merge suffixes for a column name that did not
+collide. Dead code is untested code.
+
+### Validate it before trusting it
+
+`mlbdfs lineup-accuracy` runs walk-forward: for each team-game, project
+using only prior games, then compare against who actually started. On
+synthetic history it lands around 8.5 of nine with slot error under 0.1, and
+accuracy against left-handed starters holds up against right-handed ones,
+which is the check that the platoon conditioning is doing its job.
+
+Those numbers are against a generator far simpler than a real manager. Real
+accuracy will be lower and the prior should be re-tuned against real lineup
+history once it is available.
+
 ## What to do next
 
 In rough order of expected value:
@@ -292,8 +363,12 @@ In rough order of expected value:
    values against realized scores; a flat histogram means the intervals are
    honest, U-shaped means too narrow. Worth running over a month of slates
    before trusting the tails.
-4. **Weather.** Temperature and wind are real second-order park effects and
+4. **Re-tune the lineup prior on real history** and re-run
+   `mlbdfs lineup-accuracy`. Everything about the projected-lineup model was
+   calibrated against synthetic data.
+5. **Weather.** Temperature and wind are real second-order park effects and
    the park factor structure already has a place for them.
-5. **Platoon splits.** The blending function exists in `rates.py` but is not
-   wired into the live data path.
 6. **Reached-on-error and pinch hitting**, the two known simulator gaps.
+7. **A news-driven scratch feed.** The projected-lineup model is backward
+   looking by construction and cannot see a late scratch. That gap needs a
+   licensed feed; nothing free closes it.

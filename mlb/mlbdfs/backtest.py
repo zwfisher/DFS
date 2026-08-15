@@ -271,3 +271,108 @@ def ownership_accuracy(
     return merged[
         ["Player", "Roster Position", "ownership", "projected", "error", "FPTS"]
     ].sort_values("ownership", ascending=False)
+
+
+# --------------------------------------------------------------------------
+# Projected lineup accuracy
+# --------------------------------------------------------------------------
+
+
+def lineup_accuracy(
+    history: pd.DataFrame,
+    min_prior_games: int = 20,
+    max_dates: int | None = None,
+) -> pd.DataFrame:
+    """Walk-forward test of the projected-lineup model.
+
+    For each team-game, project the lineup using only games that had already
+    happened, then compare against who actually started. This is the number
+    that decides whether projecting lineups is worth doing at all, and it
+    should be run before trusting the projections on a live slate.
+
+    Reported per team-game:
+
+    * ``hits`` -- how many of the projected nine actually started
+    * ``slot_mae`` -- mean absolute batting-order error over those hits
+    * ``brier`` -- calibration of ``start_probability`` against who started
+
+    A projection that gets seven or eight of nine is doing real work; one
+    that gets six is close to what you would get by taking yesterday's card
+    and is not worth the machinery.
+    """
+    from .projections.projected_lineups import project_lineup
+
+    history = history.copy()
+    history["game_date"] = pd.to_datetime(history["game_date"])
+
+    rows = []
+    for team, team_games in history.groupby("team"):
+        dates = np.sort(team_games["game_date"].unique())
+        targets = dates[min_prior_games:]
+        if max_dates:
+            targets = targets[-max_dates:]
+
+        for target in targets:
+            actual = team_games[team_games["game_date"] == target]
+            if len(actual) < 9:
+                continue
+            hand = str(actual["opp_hand"].iloc[0])
+
+            projection = project_lineup(history, team, hand, asof=target)
+            if projection.frame.empty:
+                continue
+
+            projected = projection.starters
+            actual_ids = set(actual["player_id"])
+            hits = projected["player_id"].isin(actual_ids)
+
+            actual_slots = dict(zip(actual["player_id"], actual["batting_order"]))
+            slot_errors = [
+                abs(int(row.batting_order) - actual_slots[row.player_id])
+                for row in projected[hits].itertuples()
+            ]
+
+            probs = projection.frame.set_index("player_id")["start_probability"]
+            started = probs.index.isin(actual_ids).astype(float)
+            brier = float(np.mean((probs.to_numpy() - started) ** 2))
+
+            rows.append(
+                {
+                    "team": team,
+                    "game_date": target,
+                    "opp_hand": hand,
+                    "hits": int(hits.sum()),
+                    "slot_mae": float(np.mean(slot_errors)) if slot_errors else np.nan,
+                    "brier": brier,
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+def accuracy_summary(accuracy: pd.DataFrame) -> pd.DataFrame:
+    """Headline numbers from ``lineup_accuracy``, split by opposing hand.
+
+    The split matters: if accuracy against left-handers is materially worse
+    than against right-handers, the platoon conditioning is not working, and
+    left-handed starters are where lineups are hardest to guess and most
+    worth guessing right.
+    """
+    if accuracy.empty:
+        return pd.DataFrame()
+
+    def block(frame: pd.DataFrame, label: str) -> dict:
+        return {
+            "split": label,
+            "team_games": len(frame),
+            "mean_hits_of_9": frame["hits"].mean(),
+            "pct_8_or_9": (frame["hits"] >= 8).mean(),
+            "pct_perfect": (frame["hits"] == 9).mean(),
+            "slot_mae": frame["slot_mae"].mean(),
+            "brier": frame["brier"].mean(),
+        }
+
+    rows = [block(accuracy, "all")]
+    for hand, frame in accuracy.groupby("opp_hand"):
+        rows.append(block(frame, f"vs {hand}HP"))
+    return pd.DataFrame(rows)

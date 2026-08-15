@@ -16,7 +16,7 @@ pip install -e ".[data,dev]"
 
 mlbdfs demo                 # whole pipeline on synthetic data, no network
 mlbdfs diagnose             # check the simulator against league aggregates
-pytest                      # 67 tests, all offline
+pytest                      # 84 tests, all offline
 ```
 
 A real slate needs a DraftKings salary export:
@@ -166,8 +166,40 @@ maps onto batting slots through a realistic pattern rather than descending
 salary — leadoff hitters are frequently cheap, and the expensive bats hit
 second through fourth.
 
-That makes running early *less wrong*. It does not make it right. Wait for
-the lineups.
+That makes running early *less wrong*. It does not make it right.
+
+### Projected lineups
+
+To run before lineups post, the model estimates who starts from the team's
+recent games -- **conditioned on the handedness of the probable opposing
+starter**, which is the whole point. Managers platoon, so "who started
+recently" is the wrong question; a modal lineup drawn from ten games against
+righties will be confidently wrong about exactly the players a platoon
+decides.
+
+It needs no new data source: the starting nine are the first nine distinct
+batters in a team-game, and Statcast carries the pitcher's throwing hand on
+every pitch, so both come out of the Statcast pull the projections already
+make.
+
+```bash
+mlbdfs lineup-accuracy --season 2026     # walk-forward validation
+mlbdfs optimize --slate DKSalaries.csv --allow-unconfirmed
+```
+
+Handedness is applied twice, since it changes two different things:
+
+- **Who is in the lineup** -- start probability and batting slot, estimated
+  against the hand on the mound and shrunk toward the player's overall rate.
+- **How they hit** -- platoon splits on the per-plate-appearance rates,
+  shrunk toward each hitter's own overall line rather than league average.
+
+Run `mlbdfs lineup-accuracy` before trusting it. On synthetic history the
+projection lands about 8.5 of 9 with a batting-slot error under 0.1; real
+accuracy will be lower, and that command is how you find out by how much.
+
+Still wait for the lineups when you can. This narrows the gap; it does not
+close it, and it cannot know about a scratch announced an hour before lock.
 
 ## Things to know before trusting the output
 
@@ -210,14 +242,14 @@ mlbdfs/
   scoring.py         DraftKings points, box score and per-event
   slate.py           Slate / SimSlate data structures
   pipeline.py        end-to-end run, including the evaluation holdout
-  backtest.py        post-contest analysis from a DK standings export
+  backtest.py        post-contest analysis, and lineup projection accuracy
   data/              caching, pybaseball + Stats API, DK CSV, id crosswalk
-  projections/       talent rates, log5 matchup, lineups, pitcher workload
+  projections/       talent rates, log5 matchup, projected lineups, workload
   sim/               base-out Markov engine, slate simulation
   ownership/         conditional logit, Dirichlet draws, field, logger
   optimize/          CP-SAT lineups, contest payouts, ROI and portfolio
 tools/diagnose_sim.py   simulator realism battery
-tests/                  67 offline tests
+tests/                  84 offline tests
 ```
 
 ## Docs

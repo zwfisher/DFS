@@ -104,25 +104,35 @@ def blend_platoon(
     effect rather than an individual one, so the split is shrunk toward the
     player's own overall rates rather than toward league average. With no
     split data the overall rates pass through unchanged.
+
+    ``splits`` is a counts frame carrying an extra ``vs_hand`` column, as
+    produced by ``data.sources.batter_counts_by_hand``.
     """
-    if splits is None or splits.empty:
+    if splits is None or splits.empty or "vs_hand" not in splits.columns:
         return overall.copy()
 
-    sub = splits[splits["vs_hand"].str.upper() == hand.upper()]
+    wanted = str(hand).upper()[:1]
+    sub = splits[splits["vs_hand"].astype(str).str.upper().str[0] == wanted]
     if sub.empty:
         return overall.copy()
 
-    pooled = pool_seasons(sub)
-    merged = overall.merge(
-        pooled, on="player_id", how="left", suffixes=("", "_split")
+    # Rename explicitly rather than leaning on merge suffixes: `overall`
+    # carries `pa_sample` while the pooled splits carry `pa`, so the names
+    # do not collide and no suffix is applied to them.
+    pooled = pool_seasons(sub.drop(columns=["vs_hand"]))
+    pooled = pooled.rename(
+        columns={"pa": "_split_pa", **{c: f"_split_{c}" for c in COUNT_COLUMNS}}
     )
+    merged = overall.merge(pooled, on="player_id", how="left")
 
-    n = merged["pa_split"].fillna(0.0).to_numpy(dtype=np.float64)[:, None]
+    n = merged["_split_pa"].fillna(0.0).to_numpy(dtype=np.float64)[:, None]
     w = n / (n + split_prior_pa)
 
     base = merged[COUNT_COLUMNS].to_numpy(dtype=np.float64)
-    split_counts = merged[[f"{c}_split" for c in COUNT_COLUMNS]].fillna(0.0).to_numpy(
-        dtype=np.float64
+    split_counts = (
+        merged[[f"_split_{c}" for c in COUNT_COLUMNS]]
+        .fillna(0.0)
+        .to_numpy(dtype=np.float64)
     )
     with np.errstate(invalid="ignore", divide="ignore"):
         split_rates = np.where(n > 0, split_counts / np.maximum(n, 1e-9), base)

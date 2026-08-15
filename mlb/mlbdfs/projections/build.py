@@ -33,14 +33,28 @@ class RateBook:
         pitchers: dict[str, np.ndarray] | None = None,
         bullpens: dict[str, np.ndarray] | None = None,
         steal_rates: dict[str, float] | None = None,
+        batters_by_hand: dict[str, dict[str, np.ndarray]] | None = None,
     ) -> None:
         self.batters = batters or {}
         self.pitchers = pitchers or {}
         self.bullpens = bullpens or {}
         self.steal_rates = steal_rates or {}
+        # {"L": {player_id: rates}, "R": {...}} -- already shrunk toward each
+        # player's own overall rates in ``rates.blend_platoon``.
+        self.batters_by_hand = batters_by_hand or {}
         self._league = league_rate_vector()
 
-    def batter(self, player_id: str) -> np.ndarray:
+    def batter(self, player_id: str, vs_hand: str | None = None) -> np.ndarray:
+        """A hitter's rates, against a specific pitcher hand when known.
+
+        Falls back to his overall rates when no split is available, which is
+        the right default: a missing split is an absence of evidence about
+        the platoon, not evidence of no platoon.
+        """
+        if vs_hand:
+            split = self.batters_by_hand.get(str(vs_hand).upper()[:1], {})
+            if player_id in split:
+                return np.asarray(split[player_id], dtype=np.float64)
         return np.asarray(self.batters.get(player_id, self._league), dtype=np.float64)
 
     def pitcher(self, player_id: str | None) -> np.ndarray:
@@ -77,7 +91,13 @@ def build_sim_slate(slate: Slate, rates: RateBook) -> SimSlate:
             lineup = resolve_lineup(slate, team)
             opp_starter_id = game.home_starter if team == game.away else game.away_starter
 
-            batter_matrix = np.stack([rates.batter(p.player_id) for p in lineup])
+            # Platoon split against the arm this lineup actually faces.
+            opp_starter = slate.player(opp_starter_id) if opp_starter_id else None
+            opp_hand = opp_starter.throws if opp_starter else None
+
+            batter_matrix = np.stack(
+                [rates.batter(p.player_id, vs_hand=opp_hand) for p in lineup]
+            )
             opp_sp = rates.pitcher(opp_starter_id)
             opp_pen = rates.bullpen(opp)
 
@@ -131,6 +151,7 @@ def rate_book_from_counts(
     pitchers: "pd.DataFrame",
     id_map: dict[str, int] | None = None,
     bullpens: "pd.DataFrame | None" = None,
+    batter_splits: "pd.DataFrame | None" = None,
 ) -> RateBook:
     """Build a RateBook from raw counting stats.
 
@@ -140,7 +161,7 @@ def rate_book_from_counts(
     """
     import pandas as pd
 
-    from .rates import COUNT_COLUMNS, shrink, steal_rates
+    from .rates import COUNT_COLUMNS, blend_platoon, shrink, steal_rates
 
     batter_rates = shrink(batters, is_pitcher=False)
     pitcher_rates = shrink(pitchers, is_pitcher=True)
@@ -181,9 +202,16 @@ def rate_book_from_counts(
             if mlbam in steals.index
         }
 
+    by_hand: dict[str, dict] = {}
+    if batter_splits is not None and not batter_splits.empty:
+        for hand in ("L", "R"):
+            blended = blend_platoon(batter_rates, batter_splits, hand)
+            by_hand[hand] = rekey(blended)
+
     return RateBook(
         batters=rekey(batter_rates),
         pitchers=rekey(pitcher_rates),
         bullpens=pen,
         steal_rates=steal_map,
+        batters_by_hand=by_hand,
     )

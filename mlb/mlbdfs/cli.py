@@ -30,6 +30,7 @@ def _load_real_slate(args) -> tuple:
     from .data import ids, sources
     from .data.dk import build_slate, infer_starters, parse_salaries, unmatched_report
     from .projections.build import rate_book_from_counts
+    from .projections.projected_lineups import apply_to_slate
 
     salaries = parse_salaries(args.slate)
     game_date = (
@@ -80,7 +81,46 @@ def _load_real_slate(args) -> tuple:
     if not missing_order.empty:
         print(f"\n{len(missing_order)} hitters without a posted lineup spot")
 
-    book = rate_book_from_counts(batters, pitchers, id_map=id_map)
+    # Throwing hand drives both halves of the platoon adjustment, so it has
+    # to come from data. Every Player defaults to right-handed, which would
+    # quietly switch the whole thing off against left-handers.
+    hands = sources.pitcher_handedness(game_date.year)
+    hand_by_mlbam = dict(zip(hands["player_id"], hands["throws"]))
+    for player in slate.players:
+        if player.is_pitcher:
+            mlbam = id_map.get(player.player_id)
+            if mlbam in hand_by_mlbam:
+                player.throws = hand_by_mlbam[mlbam]
+
+    splits = None
+    try:
+        splits = pd.concat(
+            [sources.batter_counts_by_hand(s) for s in seasons], ignore_index=True
+        )
+    except Exception as exc:  # platoon splits are an enhancement, not a hard need
+        print(f"platoon splits unavailable ({exc}); using overall rates")
+
+    book = rate_book_from_counts(
+        batters, pitchers, id_map=id_map, batter_splits=splits
+    )
+
+    # Fill any lineup that has not posted yet from recent starts against the
+    # same pitcher hand.
+    unposted = [p for p in slate.players if not p.is_pitcher and not p.confirmed]
+    if unposted and not getattr(args, "no_projected_lineups", False):
+        history = pd.concat(
+            [sources.lineup_history(s) for s in seasons], ignore_index=True
+        )
+        projections = apply_to_slate(
+            slate, history, id_map=id_map, asof=game_date
+        )
+        covered = sum(
+            1 for p in slate.players
+            if not p.is_pitcher and p.batting_order and not p.confirmed
+        )
+        print(f"projected lineups for {len(projections)} teams "
+              f"({covered} hitters), conditioned on the opposing starter's hand")
+
     return slate, book
 
 
@@ -197,6 +237,33 @@ def cmd_backtest(args) -> int:
     return 0
 
 
+def cmd_lineup_accuracy(args) -> int:
+    from . import backtest as bt
+    from .data import sources
+
+    if args.history:
+        history = pd.read_parquet(args.history)
+    else:
+        history = sources.lineup_history(args.season)
+    print(f"{len(history)} lineup rows, {history['game_date'].nunique()} dates\n")
+
+    accuracy = bt.lineup_accuracy(history, max_dates=args.max_dates)
+    if accuracy.empty:
+        print("not enough history to backtest")
+        return 1
+
+    print("-- projected lineup accuracy (walk-forward) --")
+    _show(bt.accuracy_summary(accuracy).round(3))
+    print("\n   mean_hits_of_9 near 8 means the projection is doing real work;")
+    print("   near 6 is roughly yesterday's card and not worth the machinery.")
+    print("   If 'vs LHP' trails 'vs RHP' badly, the platoon conditioning is off.")
+
+    if args.out:
+        accuracy.to_csv(args.out, index=False)
+        print(f"\nwrote {args.out}")
+    return 0
+
+
 def _report(result, args) -> None:
     from .ownership.heuristic import implied_field_mean
 
@@ -282,6 +349,12 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--slate", required=True, help="DraftKings salary CSV")
             p.add_argument("--date", help="slate date, YYYY-MM-DD (default today)")
             p.add_argument("--totals", help="CSV of team,total Vegas implied runs")
+            p.add_argument(
+                "--no-projected-lineups",
+                action="store_true",
+                dest="no_projected_lineups",
+                help="do not fill unposted lineups from recent starts",
+            )
         p.add_argument("--sims", type=int, default=10_000)
         p.add_argument("--seed", type=int, default=1)
         p.add_argument("--out", help="write results to this CSV")
@@ -327,6 +400,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--games", type=int, default=8)
     p.add_argument("--sims", type=int, default=8_000)
     p.set_defaults(func=cmd_diagnose)
+
+    p = sub.add_parser(
+        "lineup-accuracy",
+        help="walk-forward test of the projected lineup model",
+    )
+    p.add_argument("--season", type=int, default=date.today().year)
+    p.add_argument("--history", help="parquet of lineup history, instead of fetching")
+    p.add_argument("--max-dates", type=int, default=None, dest="max_dates")
+    p.add_argument("--out", help="write per-game results to this CSV")
+    p.set_defaults(func=cmd_lineup_accuracy)
 
     p = sub.add_parser("cache", help="inspect or clear the data cache")
     p.add_argument("--clear", action="store_true")

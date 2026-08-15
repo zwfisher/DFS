@@ -287,3 +287,120 @@ def bullpen_counts(season: int, force: bool = False) -> pd.DataFrame:
         return pd.DataFrame(out).reset_index(drop=True)
 
     return cached_frame("bullpen_counts", fetch, force=force, season=season)
+
+
+def _extract_lineups(pbp: pd.DataFrame) -> pd.DataFrame:
+    """Recover starting lineups and opposing starter handedness from play-by-play.
+
+    No extra endpoint is needed for this. The first nine distinct batters a
+    team sends up, ordered by when they first appear, *are* that team's
+    starting lineup in batting order -- a pinch hitter necessarily shows up
+    later. The opposing starter is the first pitcher that team faced, and
+    Statcast carries his throwing hand on every pitch.
+
+    Returns one row per team-game-hitter:
+
+        game_pk, game_date, team, opponent, player_id, batting_order, opp_hand
+    """
+    needed = {"game_pk", "game_date", "at_bat_number", "batter", "pitcher",
+              "inning_topbot", "home_team", "away_team", "p_throws"}
+    missing = needed - set(pbp.columns)
+    if missing:
+        raise ValueError(f"play-by-play is missing columns: {sorted(missing)}")
+
+    df = pbp[list(needed)].copy()
+    top = df["inning_topbot"].astype(str).str.lower().str.startswith("top")
+    df["team"] = np.where(top, df["away_team"], df["home_team"])
+    df["opponent"] = np.where(top, df["home_team"], df["away_team"])
+
+    # Batting order: rank each hitter by the first plate appearance he takes.
+    first_pa = (
+        df.groupby(["game_pk", "team", "batter"], as_index=False)
+        .agg(first_ab=("at_bat_number", "min"))
+    )
+    first_pa["batting_order"] = (
+        first_pa.groupby(["game_pk", "team"])["first_ab"]
+        .rank(method="first")
+        .astype(int)
+    )
+    starters = first_pa[first_pa["batting_order"] <= 9].copy()
+
+    # The opposing starter is whoever threw the team's first plate appearance.
+    opener = (
+        df.sort_values("at_bat_number")
+        .groupby(["game_pk", "team"], as_index=False)
+        .first()[["game_pk", "team", "opponent", "game_date", "p_throws"]]
+        .rename(columns={"p_throws": "opp_hand"})
+    )
+
+    out = starters.merge(opener, on=["game_pk", "team"], how="left")
+    out = out.rename(columns={"batter": "player_id"})
+    out["game_date"] = pd.to_datetime(out["game_date"])
+    out["opp_hand"] = out["opp_hand"].astype(str).str.upper().str[0]
+    return out[
+        ["game_pk", "game_date", "team", "opponent", "player_id",
+         "batting_order", "opp_hand"]
+    ].sort_values(["game_date", "team", "batting_order"])
+
+
+def lineup_history(season: int, force: bool = False) -> pd.DataFrame:
+    """Every starting lineup of a season, with the opposing starter's hand.
+
+    This is what the projected-lineup model trains on. It is derived from the
+    Statcast pull the projections already need, so it costs no additional
+    network access.
+    """
+
+    def fetch() -> pd.DataFrame:
+        pbp = statcast_range(date(season, 3, 1), date(season, 11, 15))
+        return _extract_lineups(pbp)
+
+    return cached_frame("lineup_history", fetch, force=force, season=season)
+
+
+def batter_counts_by_hand(season: int, force: bool = False) -> pd.DataFrame:
+    """Per-batter outcome counts split by the pitcher's throwing hand.
+
+    The platoon split is the other half of accounting for handedness: which
+    hitters are in the lineup is one question, how they hit the arm they are
+    facing is another, and the second is worth more per plate appearance.
+    Returns the canonical counts frame with an extra ``vs_hand`` column.
+    """
+
+    def fetch() -> pd.DataFrame:
+        pbp = statcast_range(date(season, 3, 1), date(season, 11, 15))
+        frames = []
+        for hand in ("L", "R"):
+            subset = pbp[pbp["p_throws"].astype(str).str.upper().str[0] == hand]
+            if subset.empty:
+                continue
+            counts = _events_to_counts(subset, "batter", season)
+            counts["vs_hand"] = hand
+            frames.append(counts)
+        if not frames:
+            return pd.DataFrame(columns=["player_id", "season", "pa", *OUTCOMES, "vs_hand"])
+        return pd.concat(frames, ignore_index=True)
+
+    return cached_frame("batter_counts_by_hand", fetch, force=force, season=season)
+
+
+def pitcher_handedness(season: int, force: bool = False) -> pd.DataFrame:
+    """Throwing hand for every pitcher who appeared in a season.
+
+    Derived from the Statcast pull rather than a roster endpoint, so it
+    costs nothing extra. Handedness is what the platoon model keys on, both
+    for who is in the lineup and for how they hit, so it has to be populated
+    from data -- defaulting every starter to right-handed would silently
+    disable the entire platoon adjustment for left-handers.
+    """
+
+    def fetch() -> pd.DataFrame:
+        pbp = statcast_range(date(season, 3, 1), date(season, 11, 15))
+        hands = (
+            pbp.groupby("pitcher")["p_throws"]
+            .agg(lambda s: s.astype(str).str.upper().str[0].mode().iloc[0])
+            .reset_index()
+        )
+        return hands.rename(columns={"pitcher": "player_id", "p_throws": "throws"})
+
+    return cached_frame("pitcher_handedness", fetch, force=force, season=season)

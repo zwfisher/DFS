@@ -414,6 +414,40 @@ START_PROBABILITY_FRINGE = 0.35
 # are actually written.
 SALARY_RANK_TO_ORDER: tuple[int, ...] = (3, 2, 4, 5, 1, 6, 7, 8, 9)
 
+# --------------------------------------------------------------------------
+# Projected lineups
+# --------------------------------------------------------------------------
+# How far back to look when estimating who starts, and how fast that
+# evidence decays. Counted in games rather than days so an off day does not
+# age a lineup.
+LINEUP_LOOKBACK_GAMES = 30
+LINEUP_HALF_LIFE_GAMES = 12.0
+
+# Strength of the shrink from a hitter's start rate against one pitcher hand
+# toward his overall rate, measured in games.
+#
+# Set by sweeping against synthetic history with known platoon structure
+# (see tools/tune_lineup_prior.py). The result is lopsided and worth
+# knowing: when a team genuinely platoons, a heavy prior is five times worse
+# than a light one, while when it does not platoon a heavy prior is only
+# marginally better. Missing a real platoon means rostering someone who does
+# not play, and the contest data puts that at about 13 points; imagining a
+# platoon that is not there only mis-weights two players who both might
+# start. The asymmetry says shrink lightly.
+#
+# The prior does affect *which* nine are projected, not only how confident
+# the estimate is. Shrinkage here is toward each player's own overall rate
+# rather than a shared constant, so it is not a common monotone transform
+# across players: a platoon bat with a strong hand-specific record and a
+# weak overall one can trade places with his counterpart as the prior moves.
+# The everyday core is stable; the platoon spot is exactly what moves.
+#
+# Re-tune against real lineup history once it is available -- the sweep is
+# against synthetic data and may understate real-world noise.
+LINEUP_HAND_PRIOR_STARTS = 1.0
+# The same shrink applied to which slot he bats in.
+LINEUP_SLOT_PRIOR_STARTS = 6.0
+
 # Below this share of hitters having a posted batting order, the slate is
 # treated as unconfirmed and the pipeline refuses to run without an explicit
 # override.

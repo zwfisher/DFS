@@ -199,3 +199,83 @@ def make_neutral_game(seed: int = 0) -> tuple[Slate, RateBook]:
     return slate, RateBook(
         batters=batter_rates, pitchers=pitcher_rates, steal_rates=steal_rates
     )
+
+
+def make_lineup_history(
+    n_games: int = 40,
+    seed: int = 3,
+    team: str = "NYY",
+    start: str = "2026-06-01",
+    platoon_strength: float = 1.0,
+    lhp_share: float = 0.28,
+) -> "pd.DataFrame":
+    """Synthetic lineup history with a known, tunable platoon structure.
+
+    Built so the estimator can be checked against ground truth it is not
+    told. The roster is seven everyday players, a platoon pair, a
+    three-quarter-time regular and a bench bat.
+
+    ``platoon_strength`` controls the pair: at 1.0 player 8 starts only
+    against left-handers and player 9 only against right-handers; at 0.0
+    neither cares and each starts half the time regardless. Sweeping it is
+    what keeps the shrinkage honest -- a prior tuned only against a strict
+    platoon will happily invent platoons out of noise on teams that do not
+    have one.
+    """
+    import pandas as pd
+
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range(start, periods=n_games, freq="D")
+    hands = rng.choice(["L", "R"], size=n_games, p=[lhp_share, 1 - lhp_share])
+
+    CORE = list(range(1, 8))
+    LEFTY_MASHER, RIGHTY_MASHER, BENCH, REGULAR = 8, 9, 10, 11
+    # Each player's usual place in the order.
+    HOME_SLOT = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
+                 LEFTY_MASHER: 5, RIGHTY_MASHER: 5, REGULAR: 8, BENCH: 9}
+
+    k = float(np.clip(platoon_strength, 0.0, 1.0))
+    rows = []
+    for game_date, hand in zip(dates, hands):
+        lineup = list(CORE)
+
+        # Probability the lefty-masher plays, interpolating between a strict
+        # platoon and complete indifference.
+        p_lefty_masher = 0.5 + 0.5 * k if hand == "L" else 0.5 - 0.5 * k
+        lineup.append(LEFTY_MASHER if rng.random() < p_lefty_masher else RIGHTY_MASHER)
+        lineup.append(BENCH if rng.random() < 0.25 else REGULAR)
+
+        # Managers keep a stable card and shuffle it only occasionally, so
+        # slots are assigned from a fixed preference with a little churn.
+        # Fully permuting the order each game would make batting-slot error
+        # unmeasurable and hide any regression in the slot model.
+        lineup = sorted(lineup, key=lambda pid: HOME_SLOT.get(pid, 9))
+        if rng.random() < 0.30 and len(lineup) > 2:
+            i = rng.integers(0, len(lineup) - 1)
+            lineup[i], lineup[i + 1] = lineup[i + 1], lineup[i]
+        order = np.arange(1, len(lineup) + 1)
+        for player_id, slot in zip(lineup, order):
+            rows.append(
+                {
+                    "game_pk": int(game_date.strftime("%Y%m%d")),
+                    "game_date": game_date,
+                    "team": team,
+                    "opponent": "BOS",
+                    "player_id": player_id,
+                    "batting_order": int(slot),
+                    "opp_hand": hand,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def lineup_history_truth(hand: str, platoon_strength: float = 1.0) -> dict[int, float]:
+    """The start probabilities ``make_lineup_history`` was generated from."""
+    k = float(np.clip(platoon_strength, 0.0, 1.0))
+    p8 = 0.5 + 0.5 * k if hand.upper().startswith("L") else 0.5 - 0.5 * k
+    truth = {i: 1.0 for i in range(1, 8)}
+    truth[8] = p8
+    truth[9] = 1.0 - p8
+    truth[11] = 0.75
+    truth[10] = 0.25
+    return truth
