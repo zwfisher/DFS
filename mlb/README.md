@@ -16,7 +16,7 @@ pip install -e ".[data,dev]"
 
 mlbdfs demo                 # whole pipeline on synthetic data, no network
 mlbdfs diagnose             # check the simulator against league aggregates
-pytest                      # 84 tests, all offline
+pytest                      # 92 tests, all offline
 ```
 
 A real slate needs a DraftKings salary export:
@@ -242,9 +242,39 @@ strong the simulated field is, which is set by the ownership model — see
 below. Rankings between candidate lineups are far more trustworthy than the
 ROI numbers themselves.
 
-**Ownership is the weakest layer.** It is hand-calibrated, not fitted,
-because there is no clean free source of historical MLB ownership. Two
-things follow. First, set `target_field_mean_score` from the average score
+**Ownership is now fitted, on one slate.** The weights come from maximum
+likelihood against a real 35,671-entry contest rather than from guesses, and
+against the old hand-set values on that contest: mean absolute error
+0.0222 → 0.0115, correlation with realized ownership 0.22 → 0.81, error on
+the twenty chalkiest plays 0.155 → 0.081. Holding out whole position groups
+reproduces the coefficients, so they transfer across positions — but one
+slate cannot show whether they transfer across *slates*. Re-fit as contests
+accumulate:
+
+```bash
+mlbdfs fit-ownership --features slate_features.parquet --entries 35671
+```
+
+Two of the original guesses were qualitatively wrong. `salary` was set
+negative on the theory that the field is price averse; the fitted sign is
+strongly positive — the field pays up. `value` was the dominant term at
+1.85; fitted, it is almost exactly zero. What the field buys is ceiling and
+price, not bargains.
+
+Value-seeking still shows up in the output, but as a *consequence of the
+salary cap* rather than a preference: expected lineup salary has to fit
+under $50,000, and the tilt enforcing that is what makes cheap productive
+players popular.
+
+Two related invariants worth knowing, both checkable:
+
+- `implied_field_mean` — ownership-weighted projection, the expected score
+  of a field lineup.
+- `expected_lineup_salary` — ownership-weighted salary. Above the cap, no
+  distribution over legal lineups can produce those marginals, and the field
+  generator will discard nearly everything it builds.
+
+Set `target_field_mean_score` from the average score
 in contests you actually enter; without it the implied field sits near
 league average and ROI comes out inflated. Second, start logging:
 
@@ -278,7 +308,7 @@ mlbdfs/
   ownership/         conditional logit, Dirichlet draws, field, logger
   optimize/          CP-SAT lineups, contest payouts, ROI and portfolio
 tools/diagnose_sim.py   simulator realism battery
-tests/                  84 offline tests
+tests/                  92 offline tests
 ```
 
 ## Docs

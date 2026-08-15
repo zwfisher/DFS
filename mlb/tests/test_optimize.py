@@ -59,9 +59,39 @@ def test_ownership_is_bounded(ownership):
     assert ownership["ownership"].between(0, 0.66).all()
 
 
-def test_ownership_prefers_value(ownership):
+def test_ownership_prefers_ceiling_and_pays_up(ownership):
+    """What the field actually buys, per the fitted weights.
+
+    This test used to assert that ownership tracks points per dollar. It
+    does not. Fitting against a real 35,671-entry contest put the value
+    coefficient at almost exactly zero and the salary coefficient strongly
+    positive: the field pays up for ceiling rather than hunting bargains.
+    """
     hitters = ownership[~ownership["is_pitcher"]]
-    assert hitters["ownership"].corr(hitters["value"]) > 0.3
+    assert hitters["ownership"].corr(hitters["ceiling"]) > 0.25
+
+    # Neither the salary nor the value correlation is asserted, and the
+    # reason is the more interesting half of the finding. The fitted weight
+    # on salary is strongly positive and on value almost exactly zero, so
+    # the field does not hunt bargains. But the feasibility tilt pushes back
+    # against salary to keep an average lineup under the cap, and on a
+    # tightly priced board it wins: net correlation with salary goes
+    # negative and with value strongly positive. Value seeking is an
+    # emergent consequence of the cap, not a preference of the field, and
+    # which way it nets out is a property of the slate.
+
+
+def test_projected_ownership_describes_an_affordable_field(ownership):
+    """Expected lineup salary must fit under the cap.
+
+    Since ownership sums to the roster slots, the ownership-weighted salary
+    is the expected salary of a field lineup. Above the cap, no distribution
+    over legal lineups produces those marginals and the field generator
+    discards almost everything it builds.
+    """
+    from mlbdfs.ownership.heuristic import expected_lineup_salary
+
+    assert expected_lineup_salary(ownership) <= ROSTER.salary_cap
 
 
 def test_ownership_draws_preserve_the_sum(ownership):

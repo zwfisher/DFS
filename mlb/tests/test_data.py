@@ -13,6 +13,7 @@ from mlbdfs.config import OUTCOMES, STABILIZATION_PA
 from mlbdfs.data.dk import _match_key, build_slate, normalize_team, parse_salaries
 from mlbdfs.ownership.logger import parse_standings, realized_ownership
 from mlbdfs.projections.rates import league_rate_vector, pool_seasons, shrink
+from mlbdfs.slate import Player
 
 
 def _counts(player_id, pa, **outcomes):
@@ -261,3 +262,51 @@ def test_backtest_isolates_one_user(tmp_path):
     summary = bt.user_summary(results, "loser")
     assert not summary.empty
     assert bt.entries_for(results, "nobody").empty
+
+
+DK_MULTI_CSV = """Position,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev
+2B/SS,Middle Infield,102,2B,5100,NYY@BOS 07/04/2026 07:10PM ET,NYY
+2B/SS,Middle Infield,102,SS,5100,NYY@BOS 07/04/2026 07:10PM ET,NYY
+OF,Outfield One,103,OF,3800,NYY@BOS 07/04/2026 07:10PM ET,BOS
+SP,Ace Pitcher,100,P,10500,NYY@BOS 07/04/2026 07:10PM ET,BOS
+"""
+
+
+def test_multi_position_players_are_one_row(tmp_path):
+    """DraftKings lists a multi-eligible player once per roster slot.
+
+    Left as separate rows they become separate Player objects, which lets a
+    team resolve to ten hitters and lets the optimizer roster the same
+    person twice while believing every slot holds someone different.
+    """
+    path = tmp_path / "dk.csv"
+    path.write_text(DK_MULTI_CSV)
+    frame = parse_salaries(path)
+
+    assert frame["dk_id"].is_unique
+    assert len(frame) == 3
+
+    infielder = frame[frame["dk_id"] == "102"].iloc[0]
+    assert set(infielder["positions"]) == {"2B", "SS"}
+    assert not infielder["is_pitcher"]
+
+
+def test_lineup_never_resolves_to_more_than_nine():
+    from mlbdfs.data.fixtures import make_slate
+    from mlbdfs.projections.lineups import resolve_lineup
+
+    slate, _ = make_slate(n_games=1, seed=2)
+    team = slate.teams[0]
+    # Give a tenth hitter a duplicate batting order, as a double-listed
+    # multi-position player would.
+    bench = [p for p in slate.players if p.team == team and not p.is_pitcher][0]
+    extra = Player(
+        player_id="dup", name="Duplicate Bat", team=team, opponent=bench.opponent,
+        positions=("2B",), salary=9999, batting_order=bench.batting_order,
+        confirmed=True,
+    )
+    slate.players.append(extra)
+
+    lineup = resolve_lineup(slate, team)
+    assert len(lineup) == 9
+    assert len({p.batting_order for p in lineup}) == 9

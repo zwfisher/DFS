@@ -96,7 +96,40 @@ def parse_salaries(path: str | Path) -> pd.DataFrame:
     out["opponent"] = [
         h if t == a else a for t, a, h in zip(out["team"], out["away"], out["home"])
     ]
-    return out.drop(columns=["positions_raw"])
+    return _collapse_multi_position(out.drop(columns=["positions_raw"]))
+
+
+def _collapse_multi_position(frame: pd.DataFrame) -> pd.DataFrame:
+    """One row per player, with every eligible position unioned together.
+
+    DraftKings lists a multi-eligible player once per roster slot -- a
+    second baseman who also qualifies at shortstop appears on two rows with
+    the same player id. Left alone, that becomes two Player objects, and
+    downstream it means a team resolves to ten or eleven hitters and the
+    optimizer can roster the same person twice while still believing every
+    slot is filled by someone different.
+    """
+    if frame["dk_id"].is_unique:
+        return frame
+
+    merged = (
+        frame.groupby("dk_id", as_index=False)
+        .agg(
+            {
+                "name": "first",
+                "salary": "first",
+                "team": "first",
+                "opponent": "first",
+                "away": "first",
+                "home": "first",
+                "is_pitcher": "any",
+                "positions": lambda vals: tuple(
+                    dict.fromkeys(p for row in vals for p in row)
+                ),
+            }
+        )
+    )
+    return merged[frame.columns]
 
 
 def _split_positions(value: str) -> tuple[str, ...]:

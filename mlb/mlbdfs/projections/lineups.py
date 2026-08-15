@@ -91,6 +91,22 @@ def resolve_lineup(slate: Slate, team: str, fill_missing: bool = True) -> list[P
     lineup = slate.lineup_for(team)
     for p in lineup:
         p.start_probability = 1.0
+
+    if len(lineup) > 9:
+        # More than nine hitters carry a batting order, which means two
+        # players were assigned the same slot -- most often a multi-position
+        # player who appeared on the slate twice. Keep one per slot rather
+        # than handing the simulator a ten-man lineup, which it cannot
+        # represent and which fails deep in a numpy stack with no useful
+        # message.
+        by_slot: dict[int, Player] = {}
+        for p in sorted(lineup, key=lambda p: (-p.salary, p.player_id)):
+            by_slot.setdefault(p.batting_order, p)
+        lineup = sorted(by_slot.values(), key=lambda p: p.batting_order)
+        for p in slate.players:
+            if p.team == team and not p.is_pitcher and p not in lineup:
+                p.batting_order = None
+
     if len(lineup) == 9:
         return lineup
     if not fill_missing:

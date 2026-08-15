@@ -57,6 +57,31 @@ def _zscore(x: np.ndarray) -> np.ndarray:
     return (x - x.mean()) / sd
 
 
+def _utility(g: pd.DataFrame, position: str, cfg: OwnershipConfig) -> np.ndarray:
+    """Fitted utility for one position group.
+
+    Pitchers carry their own coefficients: the field buys ceiling in a
+    starter and ceiling plus price in a hitter, and averaging the two into
+    one vector describes neither.
+    """
+    if position == "P":
+        return (
+            cfg.wp_value * _zscore(g["value"].to_numpy())
+            + cfg.wp_points * _zscore(g["proj"].to_numpy())
+            + cfg.wp_ceiling * _zscore(g["ceiling"].to_numpy())
+            + cfg.wp_team_total * _zscore(g["team_total"].to_numpy())
+            + cfg.wp_salary * _zscore(g["salary"].to_numpy())
+        )
+    return (
+        cfg.w_value * _zscore(g["value"].to_numpy())
+        + cfg.w_points * _zscore(g["proj"].to_numpy())
+        + cfg.w_ceiling * _zscore(g["ceiling"].to_numpy())
+        + cfg.w_team_total * _zscore(g["team_total"].to_numpy())
+        + cfg.w_salary * _zscore(g["salary"].to_numpy())
+        + cfg.w_order_top * (g["batting_order"].to_numpy() <= 5).astype(float)
+    )
+
+
 def build_features(slate: Slate, sim: SimResult) -> pd.DataFrame:
     """Assemble the pre-lock features the field actually reacts to."""
     summary = sim.summary().set_index("player_id")
@@ -106,26 +131,37 @@ def project_ownership(
         g = group.copy()
         n_slots = float(slots.get(position, 1))
 
-        utility = (
-            cfg.w_value * _zscore(g["value"].to_numpy())
-            + cfg.w_points * _zscore(g["proj"].to_numpy())
-            + cfg.w_ceiling * _zscore(g["ceiling"].to_numpy())
-            + cfg.w_team_total * _zscore(g["team_total"].to_numpy())
-            + cfg.w_salary * _zscore(g["salary"].to_numpy())
-        )
-        if position != "P":
-            # The field concentrates on the top of the order, both because
-            # those hitters get more plate appearances and because that is
-            # where stacks are built from.
-            top_of_order = (g["batting_order"].to_numpy() <= 5).astype(float)
-            utility = utility + cfg.w_order_top * top_of_order
+        utility = _utility(g, position, cfg)
 
         g["utility"] = utility
         g["ownership"] = _logit_shares(utility, n_slots)
         out.append(g)
 
-    result = pd.concat(out, ignore_index=True)
+    result = enforce_salary_feasibility(pd.concat(out, ignore_index=True))
     return result.sort_values("ownership", ascending=False).reset_index(drop=True)
+
+
+def project_ownership_from_features(
+    features: pd.DataFrame, cfg: OwnershipConfig = OWNERSHIP
+) -> pd.DataFrame:
+    """Hand-set-weight ownership for a prebuilt features frame.
+
+    Same model as ``project_ownership``, entered one step later so a fitted
+    model can be scored against it on identical inputs.
+    """
+    slots = dict(ROSTER.slots)
+    out = []
+    for position, group in features.groupby("position", sort=False):
+        g = group.copy()
+        utility = _utility(g, position, cfg)
+        if position != "P":
+            utility = utility + cfg.w_order_top * (
+                g["batting_order"].to_numpy() <= 5
+            ).astype(float)
+        g["utility"] = utility
+        g["ownership"] = _logit_shares(utility, float(slots.get(position, 1)))
+        out.append(g)
+    return enforce_salary_feasibility(pd.concat(out, ignore_index=True))
 
 
 def _logit_shares(utility: np.ndarray, n_slots: float) -> np.ndarray:
@@ -150,6 +186,73 @@ def _logit_shares(utility: np.ndarray, n_slots: float) -> np.ndarray:
         shares[free] += excess * shares[free] / shares[free].sum()
 
     return np.clip(shares, MIN_OWNERSHIP, MAX_OWNERSHIP)
+
+
+def expected_lineup_salary(ownership: pd.DataFrame) -> float:
+    """Salary of an average field lineup, implied by an ownership vector.
+
+    Companion to :func:`implied_field_mean`, and a hard feasibility test
+    rather than a soft one. Because ownership sums to the roster slots, this
+    sum *is* the expected salary of a field lineup, so a value above the cap
+    means no distribution over legal lineups can produce those marginals --
+    the projection is describing a field that cannot exist.
+
+    It only started to bite once the fitted weights put a positive
+    coefficient on salary. The hand-set weights were price averse, which
+    kept the projection cheap by accident.
+    """
+    return float((ownership["ownership"] * ownership["salary"]).sum())
+
+
+def enforce_salary_feasibility(
+    ownership: pd.DataFrame,
+    cap: int = ROSTER.salary_cap,
+    headroom: float = 0.97,
+    max_iter: int = 60,
+) -> pd.DataFrame:
+    """Tilt ownership away from salary until an average lineup fits the cap.
+
+    Solves for the single price coefficient that brings expected lineup
+    salary to ``headroom * cap``, applied on top of the fitted utilities and
+    renormalized per position group so the sum-to-slots property survives.
+
+    One parameter, because the constraint is one number. Real fields spend
+    just under the cap rather than exactly at it, hence the headroom.
+    """
+    target = cap * headroom
+    if expected_lineup_salary(ownership) <= target:
+        return ownership
+
+    slots = dict(ROSTER.slots)
+    salary_z = {
+        position: _zscore(g["salary"].to_numpy())
+        for position, g in ownership.groupby("position", sort=False)
+    }
+
+    def tilted(lam: float) -> pd.DataFrame:
+        out = []
+        for position, g in ownership.groupby("position", sort=False):
+            g = g.copy()
+            g["ownership"] = _logit_shares(
+                g["utility"].to_numpy() - lam * salary_z[position],
+                float(slots.get(position, 1)),
+            )
+            out.append(g)
+        return pd.concat(out, ignore_index=True)
+
+    lo, hi = 0.0, 8.0
+    best = tilted(hi)
+    for _ in range(max_iter):
+        mid = (lo + hi) / 2
+        candidate = tilted(mid)
+        if expected_lineup_salary(candidate) > target:
+            lo = mid
+        else:
+            hi = mid
+            best = candidate
+        if hi - lo < 1e-4:
+            break
+    return best
 
 
 def team_stack_ownership(ownership: pd.DataFrame) -> pd.DataFrame:

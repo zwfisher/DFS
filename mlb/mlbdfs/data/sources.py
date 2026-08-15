@@ -404,3 +404,42 @@ def pitcher_handedness(season: int, force: bool = False) -> pd.DataFrame:
         return hands.rename(columns={"pitcher": "player_id", "p_throws": "throws"})
 
     return cached_frame("pitcher_handedness", fetch, force=force, season=season)
+
+
+def player_directory(season: int, force: bool = False) -> pd.DataFrame:
+    """Every player in a season, with MLBAM id, name, position and hand.
+
+    Used to map DraftKings' display names onto MLBAM ids. This deliberately
+    does not use the Chadwick register that ``pybaseball`` reaches for:
+    Chadwick is distributed as a GitHub archive, and in environments where
+    GitHub traffic is routed through a credential proxy scoped to specific
+    repositories that download fails. The Stats API is the same source the
+    rest of this module already depends on and needs one request.
+    """
+
+    def fetch() -> pd.DataFrame:
+        import requests
+
+        url = (
+            "https://statsapi.mlb.com/api/v1/sports/1/players"
+            f"?season={season}&fields=people,id,fullName,primaryPosition,"
+            "abbreviation,pitchHand,code,batSide,currentTeam,name"
+        )
+        payload = requests.get(url, timeout=60).json()
+        rows = []
+        for person in payload.get("people", []):
+            rows.append(
+                {
+                    "player_id": person.get("id"),
+                    "name": person.get("fullName"),
+                    "position": (person.get("primaryPosition") or {}).get(
+                        "abbreviation"
+                    ),
+                    "throws": (person.get("pitchHand") or {}).get("code"),
+                    "bats": (person.get("batSide") or {}).get("code"),
+                    "team": (person.get("currentTeam") or {}).get("name"),
+                }
+            )
+        return pd.DataFrame(rows)
+
+    return cached_frame("player_directory", fetch, force=force, season=season)

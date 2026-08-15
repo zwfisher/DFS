@@ -366,19 +366,81 @@ that is about half a zero per lineup against waiting, which is why
 `OPTIMIZER.min_start_probability` exists -- the practical control is to
 decline the uncertain players rather than to try to be more certain.
 
+## Fitting ownership, and what the guesses got wrong
+
+The hand-set weights were replaced by maximum likelihood against a real
+35,671-entry contest. The likelihood is the one the sum-to-slots structure
+implies: within a position group the counts across players are multinomial,
+so it is a conditional logit weighted by how many entries rostered each
+player.
+
+Against the original guesses on that contest, mean absolute error went
+0.0222 to 0.0115, correlation with realized ownership 0.22 to 0.81, and
+error on the twenty chalkiest plays 0.155 to 0.081. Holding out whole
+position groups reproduces the coefficients — held-out error 0.0272 against
+in-sample 0.0270 on hitters — so they transfer across positions. They are
+still from one slate and cannot be shown to transfer across slates.
+
+Two guesses were wrong in kind, not degree:
+
+* **Salary.** Set at -0.10 on the theory that the field is price averse.
+  The fitted coefficient is strongly positive. The field pays up for good
+  players rather than hunting bargains.
+* **Value.** Set at 1.85, dominating every other term. Fitted at
+  approximately zero. Points per dollar has essentially no influence once
+  projection and ceiling are in the model.
+
+Value-seeking does still appear in the output, and the reason is worth
+stating: it is an emergent consequence of the salary cap, not a preference.
+An average lineup has to fit under $50,000, and the tilt enforcing that is
+what makes cheap productive players popular. The original model had the
+mechanism backwards -- it encoded as taste what is actually a constraint.
+
+### Two feasibility identities
+
+Because ownership sums to the roster slots, two ownership-weighted sums are
+not statistics but identities about the field:
+
+* `implied_field_mean` -- ownership-weighted projection is the expected
+  score of a field lineup.
+* `expected_lineup_salary` -- ownership-weighted salary is the expected
+  salary of a field lineup, and above the cap **no distribution over legal
+  lineups can produce those marginals**.
+
+The second only started to bite once the fitted weights made salary
+attractive; the price-averse guesses kept projections affordable by
+accident. Without it the field generator discarded 99% of what it built and
+returned 16 lineups out of 1500. Ownership is now tilted against salary by
+a single coefficient, solved to bring expected lineup salary just under the
+cap, applied on top of the fitted utilities and renormalized per group.
+
+### The metric that hid a broken fit
+
+A ridge penalty of 1.0 produced a model with better mean absolute error and
+correlation of 0.74 that was nonetheless useless: it put the chalk at 5-9%
+against a realized 20-35%. Shrinking coefficients flattens the softmax
+toward uniform, ordering survives so correlation holds, and error improves
+because most players on a slate are owned near zero and predicting near zero
+is close for them. The chalk breaks, and the chalk is the part that matters.
+`implied_field_mean` caught it -- 50.8 against 76.5 from real ownership --
+which is what a feasibility identity is for.
+
 ## What to do next
 
 In rough order of expected value:
 
 0. **Run after lineups post.** No modelling change substitutes for it.
-1. **Log real ownership.** Everything about the ownership layer improves
-   with data, and DraftKings contest standings are exact and free for
-   contests you entered. `mlbdfs log-ownership` writes them to a training
-   store. This is the single highest-value thing to start now, because it
-   only accumulates with time.
-2. **Fit the conditional logit** on that data and swap it in behind the same
-   interface, then fit the Dirichlet concentration from realized residuals
-   rather than a prior.
+1. **Log more contests.** The ownership fit rests on a single slate.
+   Everything about it improves with more, and DraftKings standings are
+   exact and free for contests you entered -- but only for those, since the
+   export endpoint requires authentication. `mlbdfs log-ownership` collects
+   them; `mlbdfs fit-ownership` re-fits.
+2. **Fit the Dirichlet concentration** from realized residuals rather than
+   a prior, which needs several slates.
+3. **Check the projection level.** On the one backtested slate, projections
+   ran about 16% below realized scoring for owned players. One slate of
+   actuals is far too noisy to recalibrate against, but it is worth watching
+   across several.
 3. **Backtest calibration.** `sim.engine.calibration_report` produces PIT
    values against realized scores; a flat histogram means the intervals are
    honest, U-shaped means too narrow. Worth running over a month of slates

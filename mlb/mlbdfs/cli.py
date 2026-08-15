@@ -264,6 +264,40 @@ def cmd_lineup_accuracy(args) -> int:
     return 0
 
 
+def cmd_fit_ownership(args) -> int:
+    from .ownership.fit import compare_to_heuristic, cross_validate, fit_ownership
+    from .ownership.heuristic import implied_field_mean
+
+    features = pd.read_parquet(args.features)
+    print(f"{len(features)} players from {args.features}\n")
+
+    model = fit_ownership(features, n_entries=args.entries, l2=args.l2)
+    print("-- fitted coefficients --")
+    _show(model.as_frame().pivot(
+        index="feature", columns="group", values="coefficient"
+    ).round(3).reset_index())
+
+    print("\n-- fitted versus the current weights, on realized ownership --")
+    _show(compare_to_heuristic(features, model).round(4))
+
+    print("\n-- leave-one-position-out (hitter groups only) --")
+    cv = cross_validate(features, n_entries=args.entries, l2=args.l2)
+    _show(cv.round(4))
+
+    predicted = model.predict(features)
+    truth = float((features["ownership"] * features["proj"]).sum())
+    print(f"\nimplied field mean: fitted {implied_field_mean(predicted):.1f} "
+          f"against {truth:.1f} from realized ownership.")
+    print("A fitted value far below that means the coefficients are flat -- "
+          "check it before trusting the error metrics, which look fine when "
+          "everything is predicted near zero.")
+
+    if args.out:
+        model.as_frame().to_csv(args.out, index=False)
+        print(f"\nwrote {args.out}")
+    return 0
+
+
 def _report(result, args) -> None:
     from .ownership.heuristic import implied_field_mean
 
@@ -410,6 +444,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-dates", type=int, default=None, dest="max_dates")
     p.add_argument("--out", help="write per-game results to this CSV")
     p.set_defaults(func=cmd_lineup_accuracy)
+
+    p = sub.add_parser(
+        "fit-ownership",
+        help="fit ownership weights to realized contest ownership",
+    )
+    p.add_argument("--features", required=True,
+                   help="parquet of slate features with a realized ownership column")
+    p.add_argument("--entries", type=int, default=10_000, help="contest entry count")
+    p.add_argument("--l2", type=float, default=0.01, help="ridge penalty; keep light")
+    p.add_argument("--out", help="write coefficients to this CSV")
+    p.set_defaults(func=cmd_fit_ownership)
 
     p = sub.add_parser("cache", help="inspect or clear the data cache")
     p.add_argument("--clear", action="store_true")

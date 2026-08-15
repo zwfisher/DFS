@@ -46,15 +46,36 @@ def chadwick_register(force: bool = False) -> pd.DataFrame:
     return cached_frame("chadwick_register", fetch, force=force)
 
 
-def build_crosswalk(force: bool = False) -> pd.DataFrame:
-    """Register with a normalized match key attached."""
+def build_crosswalk(season: int | None = None, force: bool = False) -> pd.DataFrame:
+    """Name-to-id crosswalk with a normalized match key attached.
+
+    Prefers the Stats API player directory over the Chadwick register.
+    Chadwick ships as a GitHub archive, and where GitHub traffic is routed
+    through a credential proxy scoped to attached repositories that download
+    fails outright; the Stats API is already a dependency here and answers in
+    one request. Chadwick remains the fallback, since it also carries
+    FanGraphs and Baseball Reference ids that the Stats API does not.
+    """
+    from datetime import date
+
+    from .sources import player_directory
+
+    try:
+        people = player_directory(season or date.today().year, force=force).copy()
+        people["match_key"] = people["name"].map(_match_key)
+        people["full_name"] = people["name"]
+        people["key_mlbam"] = people["player_id"]
+        # Active players first when a name key collides.
+        return people.sort_values("player_id", ascending=False)
+    except Exception as exc:
+        log.warning("player directory unavailable (%s); falling back to Chadwick", exc)
+
     people = chadwick_register(force=force).copy()
     full = (
         people["name_first"].fillna("") + " " + people["name_last"].fillna("")
     ).str.strip()
     people["match_key"] = full.map(_match_key)
     people["full_name"] = full
-    # Prefer the most recently active player when a name key collides.
     return people.sort_values("mlb_played_last", ascending=False)
 
 

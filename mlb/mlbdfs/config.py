@@ -307,13 +307,49 @@ OPTIMIZER = OptimizerConfig()
 
 @dataclass(frozen=True)
 class OwnershipConfig:
-    # Weights of the structural utility model (see ownership/heuristic.py).
-    w_value: float = 1.85  # projected points per $1k
-    w_points: float = 0.22  # raw projected points
+    # Utility weights, fitted by maximum likelihood against a real
+    # 35,671-entry contest rather than guessed. Holding out whole position
+    # groups reproduces them, so they transfer across positions -- but they
+    # come from one slate, and one slate cannot show whether they transfer
+    # across slates. Re-fit with `mlbdfs fit-ownership` as contests
+    # accumulate.
+    #
+    # Against the original hand-set guesses on that contest: mean absolute
+    # error 0.0222 -> 0.0115, correlation with realized ownership
+    # 0.22 -> 0.81, error on the twenty chalkiest plays 0.155 -> 0.081.
+    #
+    # Two guesses were qualitatively wrong, not merely mis-sized:
+    #
+    #   salary  was -0.10 on the theory that the field is price averse. The
+    #           fitted sign is strongly *positive*. The field does not hunt
+    #           bargains, it pays up for good players.
+    #   value   was 1.85 and dominated every other term. Fitted at almost
+    #           exactly zero. Points per dollar has essentially no influence
+    #           once projection and ceiling are in the model -- which is also
+    #           why ownership concentration used to pile onto cheap
+    #           high-value bats and push the implied field score down.
+    #
+    # What the field actually buys in a hitter is ceiling and price.
+    w_value: float = 0.01  # projected points per $1k
+    w_points: float = 0.29  # raw projected points
+    # Not fitted: the backtest slate had no Vegas totals, so the feature was
+    # constant and its coefficient unidentifiable. A fitted zero would be an
+    # artefact rather than evidence, so the original estimate stands.
     w_team_total: float = 0.32  # Vegas implied runs
-    w_ceiling: float = 0.14  # p90 of the simulated distribution
-    w_order_top: float = 0.30  # batting first through fifth
-    w_salary: float = -0.10  # price aversion, net of value
+    w_ceiling: float = 0.46  # p90 of the simulated distribution
+    w_order_top: float = 0.05  # batting first through fifth
+    w_salary: float = 0.45  # the field pays up for good players
+
+    # Pitchers are weighed differently enough to need their own vector:
+    # ceiling swamps everything else. Read these as a set, not one at a
+    # time -- a starter's projection, ceiling and value are so collinear
+    # that the individual coefficients are unstable and two come out
+    # negative while the combination fits well.
+    wp_value: float = -0.40
+    wp_points: float = -0.62
+    wp_team_total: float = 0.0
+    wp_ceiling: float = 2.31
+    wp_salary: float = 0.06
     # Dirichlet concentration controlling ownership uncertainty. Lower is more
     # uncertain; this is the parameter to fit once real ownership data exists.
     dirichlet_concentration: float = 140.0
