@@ -385,3 +385,36 @@ PA_BY_ORDER: tuple[float, ...] = (
 )
 
 LEAGUE_RUNS_PER_GAME = 4.45
+
+
+# --------------------------------------------------------------------------
+# Starting probability
+# --------------------------------------------------------------------------
+# A hitter who does not start scores zero, and zeros dominate finishing
+# position: in a 35,671-entry contest, 60% of the top 200 entries carried no
+# zero-scoring player against 10% of the field, and each additional zero cost
+# about 13 points. Treating a projected starter as a certain starter throws
+# that risk away entirely, so it is modelled explicitly.
+#
+# Before lineups post, the best available signal is salary rank within a
+# team: teams carry roughly thirteen position players and start nine, and
+# the expensive ones are the ones who play.
+
+START_PROBABILITY_BY_SALARY_RANK: tuple[float, ...] = (
+    0.95, 0.94, 0.93, 0.92, 0.90, 0.88, 0.84, 0.78, 0.70,
+)
+# Anyone outside a team's top nine by salary, when no lineup is posted.
+START_PROBABILITY_FRINGE = 0.35
+
+# Salary rank -> batting order slot, used only when no lineup is posted.
+# Sorting the order by salary (highest bats first) is wrong in a specific
+# way: leadoff hitters are frequently cheap contact-and-speed players while
+# the expensive bats hit second through fourth. This mapping puts the top
+# three salaries in the three-two-four slots, which is how most lineup cards
+# are actually written.
+SALARY_RANK_TO_ORDER: tuple[int, ...] = (3, 2, 4, 5, 1, 6, 7, 8, 9)
+
+# Below this share of hitters having a posted batting order, the slate is
+# treated as unconfirmed and the pipeline refuses to run without an explicit
+# override.
+MIN_CONFIRMED_LINEUP_SHARE = 0.60

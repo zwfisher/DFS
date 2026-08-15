@@ -15,7 +15,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..config import LEAGUE_RUNS_PER_GAME, PA_BY_ORDER
+from ..config import (
+    LEAGUE_RUNS_PER_GAME,
+    PA_BY_ORDER,
+    SALARY_RANK_TO_ORDER,
+    START_PROBABILITY_BY_SALARY_RANK,
+    START_PROBABILITY_FRINGE,
+)
 from ..slate import Player, Slate
 
 
@@ -43,15 +49,48 @@ def pa_uncertainty(confirmed: bool) -> float:
     return 0.55 if confirmed else 0.95
 
 
+def estimate_start_probability(salary_rank: int) -> float:
+    """Chance a hitter starts, given his salary rank within his own team.
+
+    Used only before a lineup is posted. Teams carry about thirteen position
+    players and start nine, so even the most expensive bat is not certain,
+    and a fringe player is closer to a coin flip against himself.
+    """
+    if salary_rank < len(START_PROBABILITY_BY_SALARY_RANK):
+        return START_PROBABILITY_BY_SALARY_RANK[salary_rank]
+    return START_PROBABILITY_FRINGE
+
+
 def resolve_lineup(slate: Slate, team: str, fill_missing: bool = True) -> list[Player]:
     """Return nine hitters in batting order for a team.
 
-    When a lineup is not posted, players carrying a projected order are used
-    as-is and any remaining slots are filled by salary, which is a crude but
-    surprisingly effective proxy for who a manager writes into the middle of
-    the order.
+    Hitters with a posted batting order are used as given and marked as
+    certain to start. Any remaining slots are guessed from salary.
+
+    That guess is genuinely poor and the code should not pretend otherwise.
+    Contest results show why: a hitter who does not start scores zero, and
+    zeros dominate finishing position -- 60% of the top 200 entries in a
+    35,671-entry field carried no zero-scoring player, against 10% of the
+    field overall, with each additional zero worth about 13 points. Guessing
+    a lineup therefore risks the most expensive mistake available.
+
+    Two things follow, and both are done here rather than left implicit:
+
+    * Guessed starters get a ``start_probability`` below one, so the
+      simulator prices the chance they do not play instead of assuming they
+      do.
+    * Salary rank maps onto batting slots through
+      ``SALARY_RANK_TO_ORDER`` rather than descending salary. Leadoff
+      hitters are frequently cheap contact-and-speed players while the
+      expensive bats hit second through fourth, so sorting the order by
+      price misallocates plate appearances at both ends.
+
+    The real remedy is to run after lineups post; ``pipeline.run_pipeline``
+    refuses to proceed on a mostly unconfirmed slate unless overridden.
     """
     lineup = slate.lineup_for(team)
+    for p in lineup:
+        p.start_probability = 1.0
     if len(lineup) == 9:
         return lineup
     if not fill_missing:
@@ -67,17 +106,25 @@ def resolve_lineup(slate: Slate, team: str, fill_missing: bool = True) -> list[P
         key=lambda p: -p.salary,
     )
 
+    open_slots = [slot for slot in SALARY_RANK_TO_ORDER if slot not in taken]
     filled = list(lineup)
-    for slot in range(1, 10):
-        if slot in taken:
-            continue
+    for rank, slot in enumerate(open_slots):
         if not bench:
             raise ValueError(f"{team} has too few hitters to fill a lineup")
         pick = bench.pop(0)
         pick.batting_order = slot
+        pick.start_probability = estimate_start_probability(rank)
         filled.append(pick)
 
     return sorted(filled, key=lambda p: p.batting_order)
+
+
+def confirmed_share(slate: Slate) -> float:
+    """Fraction of the slate's hitters that have a posted batting order."""
+    hitters = [p for p in slate.players if not p.is_pitcher]
+    if not hitters:
+        return 1.0
+    return sum(1 for p in hitters if p.confirmed) / len(hitters)
 
 
 def order_weights(lineup: list[Player], implied_runs: float) -> np.ndarray:

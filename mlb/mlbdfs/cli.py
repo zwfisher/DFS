@@ -98,6 +98,7 @@ def cmd_demo(args) -> int:
         n_candidates=args.candidates,
         n_lineups=args.lineups,
         seed=args.seed,
+        allow_unconfirmed=getattr(args, "allow_unconfirmed", True),
     )
     _report(result, args)
     return 0
@@ -144,8 +145,55 @@ def cmd_optimize(args) -> int:
         n_candidates=args.candidates,
         n_lineups=args.lineups,
         seed=args.seed,
+        allow_unconfirmed=args.allow_unconfirmed,
     )
     _report(result, args)
+    return 0
+
+
+def cmd_backtest(args) -> int:
+    from . import backtest as bt
+
+    results = bt.load(args.standings)
+    print(f"{len(results.entries)} entries, {len(results.players)} players rostered\n")
+
+    print("-- score distribution --")
+    _show(bt.score_distribution(results).round(2))
+
+    print("\n-- cost of a zero-scoring player --")
+    _show(bt.zero_analysis(results).round(3))
+
+    print("\n-- zero rate by ownership tier (hitters) --")
+    print("   a starting hitter posts an empty line about 20% of the time;")
+    print("   far above that means those players never took the field\n")
+    _show(bt.zeros_by_ownership(results).round(3))
+
+    print("\n-- winners versus the field --")
+    _show(bt.winners_versus_field(results).round(3))
+
+    print("\n-- did the chalk pay off? --")
+    _show(bt.chalk_performance(results).round(3))
+
+    if args.username:
+        summary = bt.user_summary(results, args.username)
+        if summary.empty:
+            print(f"\nno entries found for '{args.username}'")
+        else:
+            print(f"\n-- your entries ({args.username}) --")
+            _show(summary.round(3))
+            _show(bt.entries_for(results, args.username)
+                  [["Rank", "Points", "zeros"]].head(25).round(2))
+
+    if args.projected:
+        acc = bt.ownership_accuracy(results, pd.read_csv(args.projected))
+        if not acc.empty:
+            print("\n-- ownership projection accuracy --")
+            print(f"   mean absolute error {acc['error'].abs().mean():.3f}, "
+                  f"bias {acc['error'].mean():+.3f}")
+            _show(acc.head(15).round(3))
+
+    print(f"\nSet target_field_mean_score = {results.field_mean_score:.1f} "
+          "in config.py to calibrate the simulated field to this contest.")
     return 0
 
 
@@ -260,7 +308,20 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("optimize", help="build and rank lineups for a slate")
     add_common(p)
     add_contest(p)
+    p.add_argument(
+        "--allow-unconfirmed",
+        action="store_true",
+        help="run before batting orders post; projections are much weaker",
+    )
     p.set_defaults(func=cmd_optimize)
+
+    p = sub.add_parser(
+        "backtest", help="analyse a finished contest from its standings export"
+    )
+    p.add_argument("--standings", required=True)
+    p.add_argument("--username", help="your DraftKings name, to isolate your entries")
+    p.add_argument("--projected", help="CSV from `project`, to score ownership accuracy")
+    p.set_defaults(func=cmd_backtest)
 
     p = sub.add_parser("diagnose", help="check the simulator against league aggregates")
     p.add_argument("--games", type=int, default=8)

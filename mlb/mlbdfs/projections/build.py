@@ -99,6 +99,9 @@ def build_sim_slate(slate: Slate, rates: RateBook) -> SimSlate:
                     sb_rate=np.array(
                         [rates.steal(p.player_id) for p in lineup], dtype=np.float64
                     ),
+                    start_probability=np.array(
+                        [p.start_probability for p in lineup], dtype=np.float64
+                    ),
                     starter_idx=index.get(starter_id, -1) if starter_id else -1,
                     implied_runs=implied,
                 )

@@ -31,6 +31,12 @@ class Player:
     throws: str = "R"
     confirmed: bool = False
     dk_id: str | None = None
+    # Probability this player is in the starting lineup. 1.0 once a lineup
+    # is posted; estimated from salary rank before that. A hitter who does
+    # not start scores zero, which is the most damaging thing that can
+    # happen to a lineup, so it is carried explicitly rather than assumed
+    # away.
+    start_probability: float = 1.0
 
     @property
     def in_lineup(self) -> bool:
@@ -128,6 +134,7 @@ class SimTeam:
     vs_starter: np.ndarray  # (9, n_outcomes) float64 -- rates vs opposing starter
     vs_bullpen: np.ndarray  # (9, n_outcomes) float64 -- rates vs opposing bullpen
     sb_rate: np.ndarray  # (9,) float64 -- steal attempt rate per time on first
+    start_probability: np.ndarray  # (9,) float64 -- chance each hitter starts
     starter_idx: int  # global index of this team's own starting pitcher
     implied_runs: float
 

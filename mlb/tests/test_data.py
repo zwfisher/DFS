@@ -192,3 +192,72 @@ def test_parse_standings_and_ownership(tmp_path):
     # Names must not absorb the following position token.
     assert "Second Arm" in set(parsed["name"])
     assert not any("P " in n for n in parsed["name"])
+
+
+# --------------------------------------------------------------------------
+# Contest backtesting
+# --------------------------------------------------------------------------
+
+BACKTEST_CSV = """Rank,EntryId,EntryName,TimeRemaining,Points,Lineup,,Player,Roster Position,%Drafted,FPTS
+1,1,winner (1/20),0,200.0,P Ace One P Ace Two C Good Catcher 1B Good First 2B Good Second 3B Good Third SS Good Short OF Good OFa OF Good OFb OF Good OFc,,Ace One,P,40.00%,30.0
+2,2,loser (1/20),0,80.0,P Ace One P Ace Two C Dud Catcher 1B Dud First 2B Good Second 3B Good Third SS Good Short OF Good OFa OF Good OFb OF Good OFc,,Ace Two,P,35.00%,25.0
+3,3,other (1/20),0,60.0,P Ace One P Ace Two C Dud Catcher 1B Dud First 2B Dud Second 3B Good Third SS Good Short OF Good OFa OF Good OFb OF Good OFc,,Good Catcher,C,20.00%,15.0
+,,,,,,,Dud Catcher,C,1.00%,0.0
+,,,,,,,Good First,1B,18.00%,14.0
+,,,,,,,Dud First,1B,1.50%,0.0
+,,,,,,,Good Second,2B,15.00%,12.0
+,,,,,,,Dud Second,2B,1.20%,0.0
+,,,,,,,Good Third,3B,14.00%,11.0
+,,,,,,,Good Short,SS,13.00%,10.0
+,,,,,,,Good OFa,OF,12.00%,20.0
+,,,,,,,Good OFb,OF,11.00%,18.0
+,,,,,,,Good OFc,OF,10.00%,15.0
+"""
+
+
+def test_backtest_counts_zero_scoring_players(tmp_path):
+    from mlbdfs import backtest as bt
+
+    path = tmp_path / "standings.csv"
+    path.write_text(BACKTEST_CSV)
+    results = bt.load(path)
+
+    assert len(results.entries) == 3
+    assert len(results.players) == 13
+
+    zeros = dict(zip(results.entries["username"], results.entries["zeros"]))
+    assert zeros["winner"] == 0
+    assert zeros["loser"] == 2
+    assert zeros["other"] == 3
+    assert (results.entries["unmatched"] == 0).all()
+
+
+def test_backtest_reports_field_mean_and_zero_cost(tmp_path):
+    from mlbdfs import backtest as bt
+
+    path = tmp_path / "standings.csv"
+    path.write_text(BACKTEST_CSV)
+    results = bt.load(path)
+
+    assert results.field_mean_score == pytest.approx((200 + 80 + 60) / 3)
+    assert results.winning_score == pytest.approx(200.0)
+
+    # More zeros must mean a worse mean score.
+    analysis = bt.zero_analysis(results).sort_values("zeros")
+    assert analysis["mean_score"].is_monotonic_decreasing
+
+
+def test_backtest_isolates_one_user(tmp_path):
+    from mlbdfs import backtest as bt
+
+    path = tmp_path / "standings.csv"
+    path.write_text(BACKTEST_CSV)
+    results = bt.load(path)
+
+    mine = bt.entries_for(results, "LOSER")  # match is case insensitive
+    assert len(mine) == 1
+    assert mine.iloc[0]["Points"] == pytest.approx(80.0)
+
+    summary = bt.user_summary(results, "loser")
+    assert not summary.empty
+    assert bt.entries_for(results, "nobody").empty

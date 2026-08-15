@@ -100,9 +100,29 @@ def simulate_slate(
         for t, side in enumerate((game.away, game.home)):
             for slot in range(9):
                 pid = int(result.batter_idx[t, slot])
-                if pid >= 0:
-                    scores[:, pid] += result.bat_pts[t, slot]
-                    player_pa[sim_slate.player_ids[pid]] = result.pa_count[t, slot]
+                if pid < 0:
+                    continue
+
+                points = result.bat_pts[t, slot]
+                appearances = result.pa_count[t, slot]
+
+                # A hitter who is scratched scores zero, and that is by far
+                # the most damaging thing that can happen to a lineup. When
+                # the batting order is only a guess, the chance he does not
+                # play is drawn per simulation rather than assumed away.
+                #
+                # The replacement bat is not re-simulated -- the team's other
+                # eight hitters keep the run environment they had. That
+                # understates the knock-on effect slightly and is worth far
+                # less than pricing the zero at all.
+                p_start = float(side.start_probability[slot])
+                if p_start < 1.0:
+                    starts = rng.random(n) < p_start
+                    points = points * starts
+                    appearances = appearances * starts
+
+                scores[:, pid] += points
+                player_pa[sim_slate.player_ids[pid]] = appearances
             sp = int(result.starter_idx[t])
             if sp >= 0:
                 scores[:, sp] += result.sp_pts[t]

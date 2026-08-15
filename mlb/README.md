@@ -16,7 +16,7 @@ pip install -e ".[data,dev]"
 
 mlbdfs demo                 # whole pipeline on synthetic data, no network
 mlbdfs diagnose             # check the simulator against league aggregates
-pytest                      # 55 tests, all offline
+pytest                      # 67 tests, all offline
 ```
 
 A real slate needs a DraftKings salary export:
@@ -26,6 +26,16 @@ mlbdfs project  --slate DKSalaries.csv --date 2026-08-12
 mlbdfs optimize --slate DKSalaries.csv --date 2026-08-12 \
                 --contest large_gpp --entries 50000 --fee 5 \
                 --lineups 20 --out lineups.csv
+```
+
+**Run it after batting orders post**, usually one to three hours before
+first pitch. `optimize` refuses a slate whose lineups are mostly unposted
+unless you pass `--allow-unconfirmed`, for reasons in the next section.
+
+After the contest settles:
+
+```bash
+mlbdfs backtest --standings contest-standings-193621106.csv --username yourname
 ```
 
 ## How it works
@@ -112,6 +122,7 @@ told:
 | starter innings | 5.0 | ~5.2 |
 | PA, leadoff slot | 4.73 | 4.66 |
 | PA, nine hole | 3.85 | 3.96 |
+| P(hitter scores exactly 0) | 0.216 | ~0.20 |
 
 ## Performance
 
@@ -128,6 +139,35 @@ Measured on a 10-game slate, single core:
 A 15-game slate at 20k sims simulates in 14s. The optimizer dominates
 runtime at roughly 150ms per lineup; lower `--candidates` to trade
 thoroughness for speed.
+
+## Wait for lineups
+
+This is the most important operational rule in the project, and it is here
+because ignoring it cost real money.
+
+A hitter who is not in the starting lineup scores zero, and zeros dominate
+finishing position. From a 35,671-entry contest:
+
+| | top 200 | field |
+|---|---|---|
+| mean zero-scoring players | 0.47 | 2.13 |
+| share with no zeros | 60.5% | 10.1% |
+| share with 3+ zeros | 0.5% | 36.7% |
+
+Each additional zero was worth about 13 points. No entry with three or more
+zeros finished in the top 1%.
+
+Before lineups post there is no way to know who starts, so `resolve_lineup`
+guesses the nine from salary. The model now prices that guess instead of
+assuming it right: guessed starters carry a `start_probability` below one,
+which the simulator applies per simulation, roughly doubling their chance of
+scoring zero and lowering their projection accordingly. Salary rank also
+maps onto batting slots through a realistic pattern rather than descending
+salary — leadoff hitters are frequently cheap, and the expensive bats hit
+second through fourth.
+
+That makes running early *less wrong*. It does not make it right. Wait for
+the lineups.
 
 ## Things to know before trusting the output
 
@@ -170,13 +210,14 @@ mlbdfs/
   scoring.py         DraftKings points, box score and per-event
   slate.py           Slate / SimSlate data structures
   pipeline.py        end-to-end run, including the evaluation holdout
+  backtest.py        post-contest analysis from a DK standings export
   data/              caching, pybaseball + Stats API, DK CSV, id crosswalk
   projections/       talent rates, log5 matchup, lineups, pitcher workload
   sim/               base-out Markov engine, slate simulation
   ownership/         conditional logit, Dirichlet draws, field, logger
   optimize/          CP-SAT lineups, contest payouts, ROI and portfolio
 tools/diagnose_sim.py   simulator realism battery
-tests/                  55 offline tests
+tests/                  67 offline tests
 ```
 
 ## Docs

@@ -220,10 +220,66 @@ the *next* inning on.
 
 ---
 
+## Zeros, and why start probability is modelled
+
+The first real contest run produced poor results, and the standings file
+explained why with unusual clarity.
+
+A hitter who does not start scores zero. So does one who goes hitless with
+nothing else, and the simulator already priced that correctly — a
+league-average starter posts an empty line 21.6% of the time here against a
+theoretical ~20%. What the model did *not* price was the chance the player
+never took the field at all.
+
+The evidence that this dominates everything else:
+
+| | top 200 | field |
+|---|---|---|
+| mean zero-scoring players | 0.47 | 2.13 |
+| share with no zeros | 60.5% | 10.1% |
+| share with 3+ zeros | 0.5% | 36.7% |
+
+Each zero cost about 13 points of mean score and moved median finish by
+roughly 5,500 places in a 35,671-entry field. The zero-rate by ownership
+tier confirms the mechanism rather than blaming variance: hitters owned
+under 2% posted zeros 62% of the time, three times the rate for a starter
+who simply had a bad night. Those players were not in the lineup.
+
+The old `resolve_lineup` did three things wrong when no lineup was posted,
+and its docstring called the result "a crude but surprisingly effective
+proxy", which the data does not support:
+
+1. It took each team's nine highest-salary hitters and treated all nine as
+   **certain** starters, assigning zero probability to the single most
+   damaging outcome available.
+2. It assigned batting order by **descending salary**. Real leadoff hitters
+   are frequently cheap contact-and-speed players while the expensive bats
+   hit second through fourth, so plate appearances were misallocated at both
+   ends — and the consecutive-order stack constraint was then optimizing
+   over a fictional lineup card.
+3. Any hitter outside the top nine by salary never entered the simulation at
+   all, so a cheap genuine starter was invisible to the optimizer.
+
+The fix carries `start_probability` on each player, set to 1.0 when a lineup
+is posted and estimated from salary rank otherwise, and the simulator draws
+against it per simulation. This is the honest shape of the uncertainty: it
+lowers the projection, roughly doubles the modelled chance of a zero, and
+widens the downside exactly where the losses came from. Salary rank now maps
+to batting slots through `SALARY_RANK_TO_ORDER`.
+
+The replacement bat is not re-simulated when a player is scratched — the
+other eight keep their run environment. That understates a second-order
+effect and is worth far less than pricing the zero at all.
+
+None of this makes running early correct. `run_pipeline` refuses a slate
+that is mostly unconfirmed unless explicitly overridden, because the right
+answer is to wait for the lineups.
+
 ## What to do next
 
 In rough order of expected value:
 
+0. **Run after lineups post.** No modelling change substitutes for it.
 1. **Log real ownership.** Everything about the ownership layer improves
    with data, and DraftKings contest standings are exact and free for
    contests you entered. `mlbdfs log-ownership` writes them to a training

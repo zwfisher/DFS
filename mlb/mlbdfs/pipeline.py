@@ -27,9 +27,15 @@ from .optimize.portfolio import evaluate_lineups, select_portfolio
 from .ownership.field import Field, generate_field
 from .ownership.heuristic import calibrate_to_field_strength, project_ownership
 from .ownership.uncertainty import ownership_interval
+from .config import MIN_CONFIRMED_LINEUP_SHARE
 from .projections.build import RateBook, build_sim_slate
+from .projections.lineups import confirmed_share
 from .sim.engine import SimResult, simulate_slate
 from .slate import Slate
+
+
+class UnconfirmedLineupError(RuntimeError):
+    """Raised when a slate's batting orders are mostly unposted."""
 
 
 @dataclass
@@ -64,10 +70,37 @@ def run_pipeline(
     n_lineups: int = 20,
     seed: int = 1,
     verbose: bool = True,
+    allow_unconfirmed: bool = False,
 ) -> PipelineResult:
-    """Run projections, ownership, field and optimization for one slate."""
+    """Run projections, ownership, field and optimization for one slate.
+
+    Refuses to run on a slate whose batting orders are mostly unposted
+    unless ``allow_unconfirmed`` is set. That is not fussiness. Without a
+    posted lineup the projected nine is a guess from salary, and a hitter
+    who does not start scores zero -- in a 35,671-entry contest, 60% of the
+    top 200 entries carried no zero-scoring player against 10% of the field,
+    and each additional zero cost about 13 points. Guessing lineups risks
+    the most expensive error available, so it has to be asked for.
+    """
     contest = contest or large_gpp()
     log = print if verbose else (lambda *a, **k: None)
+
+    share = confirmed_share(slate)
+    if share < MIN_CONFIRMED_LINEUP_SHARE:
+        message = (
+            f"only {share:.0%} of hitters have a posted batting order "
+            f"(need {MIN_CONFIRMED_LINEUP_SHARE:.0%}). Lineups usually post "
+            "1-3 hours before first pitch; running now means guessing who "
+            "starts, and a hitter who does not start scores zero."
+        )
+        if not allow_unconfirmed:
+            raise UnconfirmedLineupError(
+                message + " Pass allow_unconfirmed=True (--allow-unconfirmed) "
+                "to proceed anyway, with start probabilities applied."
+            )
+        log(f"WARNING: {message}")
+        log("         proceeding with estimated start probabilities; "
+            "projections are materially less reliable.")
 
     sim_slate = build_sim_slate(slate, rates)
 
