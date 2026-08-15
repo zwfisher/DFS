@@ -342,9 +342,29 @@ synthetic history it lands around 8.5 of nine with slot error under 0.1, and
 accuracy against left-handed starters holds up against right-handed ones,
 which is the check that the platoon conditioning is doing its job.
 
-Those numbers are against a generator far simpler than a real manager. Real
-accuracy will be lower and the prior should be re-tuned against real lineup
-history once it is available.
+### What it actually scores on real data
+
+Backtested over 498 real team-games: **7.55 of nine**, against 6.89 for
+"yesterday's card" and 7.11 for a hand-agnostic modal nine of the last ten.
+The conditioning is worth about +0.44 players over a decent baseline, which
+is real but a long way from the 8.5 the synthetic fixture suggested. The
+synthetic generator is far simpler than a manager, and it flattered the
+model by about a full player.
+
+Re-tuning on real data changed one default and confirmed another. The hand
+prior held up -- anything between 0.5 and 1.0 performs the same, and it
+degrades above 3, exactly as the synthetic sweep said. The recency half life
+did not: 4.5 games beats the 12 originally chosen by about 6% of Brier.
+Lineups churn faster than a season-long view suggests.
+
+The finding that matters most is the ceiling. `start_probability` is
+reasonably calibrated but tops out near 0.94: players the model is most
+confident about still fail to start 6% of the time, and tightening the
+threshold from 0.90 to 0.95 buys nothing (93.5% to 93.7%). There is no such
+thing as a lock before the card is posted. At roughly 13 points per zero
+that is about half a zero per lineup against waiting, which is why
+`OPTIMIZER.min_start_probability` exists -- the practical control is to
+decline the uncertain players rather than to try to be more certain.
 
 ## What to do next
 
@@ -363,9 +383,9 @@ In rough order of expected value:
    values against realized scores; a flat histogram means the intervals are
    honest, U-shaped means too narrow. Worth running over a month of slates
    before trusting the tails.
-4. **Re-tune the lineup prior on real history** and re-run
-   `mlbdfs lineup-accuracy`. Everything about the projected-lineup model was
-   calibrated against synthetic data.
+4. **Confirm the scoring point values.** The roster rules are verified
+   against DraftKings' game-type endpoint; the scoring table is rendered
+   client side and is still taken from secondary sources.
 5. **Weather.** Temperature and wind are real second-order park effects and
    the park factor structure already has a place for them.
 6. **Reached-on-error and pinch hitting**, the two known simulator gaps.

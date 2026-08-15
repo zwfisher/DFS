@@ -1,10 +1,21 @@
 """Scoring constants, roster rules and paths.
 
-Everything DraftKings-specific that could change lives here as a one-line edit.
-The scoring values below could not be confirmed against DraftKings directly
-(the host is unreachable from the build environment) -- verify them against
-the live rules page before trusting output, because a wrong constant here
-silently corrupts every layer above it.
+Everything DraftKings-specific that could change lives here as a one-line
+edit.
+
+The **roster rules** below are confirmed against DraftKings' own game-type
+endpoint, ``api.draftkings.com/lineups/v1/gametypes/2/rules`` (game type 2 is
+MLB Classic): ten roster slots as P/P/C/1B/2B/3B/SS/OF/OF/OF, a $50,000
+salary cap, at least two teams and two games, unique players, and a five
+hitter per team maximum -- that last one carried in the error codes as
+INVALID_TEAM_COUNT_MLB, "For MLB lineups, the max number of hitters from one
+team is 5", not in the (null) teamPositionLimits field.
+
+The **scoring point values** are still unconfirmed. DraftKings renders its
+scoring table client side and exposes no JSON for it, so the numbers below
+come from secondary sources. Check them against the live rules page before
+trusting output: a wrong constant here silently corrupts every layer above
+it, and nothing in the test suite can catch it.
 """
 
 from __future__ import annotations
@@ -265,6 +276,17 @@ class OptimizerConfig:
         (4, 2),
     )
     require_consecutive_order: bool = True
+    # Refuse to roster a hitter whose chance of starting is below this.
+    #
+    # Measured on real data, a projected lineup is right about 7.5 of 9, and
+    # start_probability tops out near 0.94 -- there is no such thing as a
+    # lock until the card is posted. Since a hitter who does not start
+    # scores zero and each zero costs about 13 points, the practical control
+    # is to decline the uncertain ones. At 0.80 the survivors start 90.5% of
+    # the time and roughly five per team-game remain, which is enough pool
+    # to build from. Irrelevant once lineups are confirmed, since everyone
+    # is then at 1.0.
+    min_start_probability: float = 0.0
     randomize_sigma: float = 1.0  # scale on sampled score noise for the pool
     solver_msg: bool = False
     # Stop branch and bound once within this relative gap. The objective is
@@ -421,7 +443,10 @@ SALARY_RANK_TO_ORDER: tuple[int, ...] = (3, 2, 4, 5, 1, 6, 7, 8, 9)
 # evidence decays. Counted in games rather than days so an off day does not
 # age a lineup.
 LINEUP_LOOKBACK_GAMES = 30
-LINEUP_HALF_LIFE_GAMES = 12.0
+# Tuned on 498 real team-games of walk-forward backtesting. Recency matters
+# more than first assumed: a half life of 4.5 games beats 12 by about 6% of
+# Brier score. Lineups churn faster than a season-long view suggests.
+LINEUP_HALF_LIFE_GAMES = 4.5
 
 # Strength of the shrink from a hitter's start rate against one pitcher hand
 # toward his overall rate, measured in games.
@@ -442,8 +467,8 @@ LINEUP_HALF_LIFE_GAMES = 12.0
 # weak overall one can trade places with his counterpart as the prior moves.
 # The everyday core is stable; the platoon spot is exactly what moves.
 #
-# Re-tune against real lineup history once it is available -- the sweep is
-# against synthetic data and may understate real-world noise.
+# Confirmed against 498 real team-games: the prior barely matters between
+# 0.5 and 1.0, and gets worse above 3. The synthetic sweep held up.
 LINEUP_HAND_PRIOR_STARTS = 1.0
 # The same shrink applied to which slot he bats in.
 LINEUP_SLOT_PRIOR_STARTS = 6.0

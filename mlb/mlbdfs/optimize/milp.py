@@ -75,7 +75,12 @@ class LineupOptimizer:
         self.rules = rules
         self.cfg = cfg
 
-        self.players = [p for p in slate.players if p.in_lineup]
+        self.players = [
+            p
+            for p in slate.players
+            if p.in_lineup
+            and (p.is_pitcher or p.start_probability >= cfg.min_start_probability)
+        ]
         self.player_ids = [p.player_id for p in self.players]
         self.index = {pid: i for i, pid in enumerate(self.player_ids)}
         self.n = len(self.players)

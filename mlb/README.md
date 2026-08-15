@@ -194,19 +194,48 @@ Handedness is applied twice, since it changes two different things:
 - **How they hit** -- platoon splits on the per-plate-appearance rates,
   shrunk toward each hitter's own overall line rather than league average.
 
-Run `mlbdfs lineup-accuracy` before trusting it. On synthetic history the
-projection lands about 8.5 of 9 with a batting-slot error under 0.1; real
-accuracy will be lower, and that command is how you find out by how much.
+**Measured on 498 real team-games** of walk-forward backtesting:
+
+| | value |
+|---|---|
+| projected nine that actually start | **7.55 of 9** |
+| naive baseline (yesterday's card) | 6.89 |
+| stronger baseline (modal nine of last ten) | 7.11 |
+| batting-slot error, among correct picks | 0.76 |
+| vs RHP / vs LHP | 7.66 / 7.32 |
+
+So the handedness conditioning and recency weighting are worth about
++0.44 players over a decent hand-agnostic baseline. Lineups against
+left-handers are genuinely harder, which is where managers make changes.
+
+**The ceiling is the important part.** `start_probability` is reasonably
+calibrated, but it tops out near 0.94 -- even the model's most confident
+players fail to start 6% of the time. There is no such thing as a lock
+before the card is posted:
+
+| projected start probability | actually started |
+|---|---|
+| ≥ 0.80 | 90.5% |
+| ≥ 0.90 | 93.5% |
+| ≥ 0.95 | 93.7% |
+
+At roughly 13 points per zero, rostering eight hitters at 0.90 costs about
+half a zero per lineup against waiting for confirmation. That is real but
+survivable; it is not nothing. Set `OPTIMIZER.min_start_probability` (0.80
+leaves about five playable hitters per team-game) to decline the uncertain
+ones.
 
 Still wait for the lineups when you can. This narrows the gap; it does not
 close it, and it cannot know about a scratch announced an hour before lock.
 
 ## Things to know before trusting the output
 
-**Verify the scoring constants.** `config.py` encodes DraftKings MLB Classic
-scoring, but DraftKings was unreachable from the environment this was built
-in, so the values are from secondary sources. Check them against the live
-rules page. A wrong constant here silently corrupts every layer above it.
+**Verify the scoring point values.** The roster rules are now confirmed
+against DraftKings' own game-type endpoint -- ten slots, $50,000 cap, two
+games and two teams minimum, five hitters per team. The *scoring* values are
+not: DraftKings renders that table client side and exposes no JSON for it,
+so those numbers still come from secondary sources. A wrong constant there
+silently corrupts every layer above it and no test can catch it.
 
 **Absolute ROI is soft; relative ROI is the signal.** ROI depends on how
 strong the simulated field is, which is set by the ownership model — see
