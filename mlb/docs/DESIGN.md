@@ -560,6 +560,39 @@ all three. Settling it needs contests from other slates, which is now the
 highest-value open item in the project. Until then absolute ROI is not a
 number to act on; the ranking between candidate lineups is.
 
+### Stacking, and the experiment that nearly overturned it
+
+Stacking is the project's founding assumption, and the football analogy
+that motivates it does not transfer cleanly: there is no
+quarterback-to-receiver link in baseball, and measured same-team hitter
+correlation is only about +0.10. `tools/stacking_value.py` therefore tests
+it directly, holding everything constant except team concentration.
+
+The result replicates across a real slate and the synthetic fixture:
+stacking costs roughly a point of mean and buys 4–5% at the 99.9th
+percentile. It then wins tournaments by 15–35% and loses flat double-ups by
+14–15%. The loss is the more consistent figure, and the more useful one:
+it says plainly that the stack shapes are a tournament setting, not a
+universal one.
+
+The mechanism worth internalising is that +0.10 is a *small* correlation
+and a top-heavy payout curve is a large amplifier. Nothing about the tail
+gain is dramatic; what is dramatic is a contest that pays only for the
+99.97th percentile.
+
+**The methodological lesson is the more valuable half.** An early version
+of this experiment ran 40 candidates at 3,000 simulations and reported
+stacking losing in all three contests — the opposite sign, in every cell.
+It was underpowered: 40 candidates leave 37 after de-duplication, the best
+eight of 37 is a thin selection, and P(win) near 0.001 is barely resolvable
+in 3,000 draws. That result was believed long enough to be written up as a
+contradiction before the full-fidelity run reversed it.
+
+Two rules follow. Any ROI comparison in this project needs at least the
+tool's defaults (120 candidates, 8,000 simulations, a 12,000-lineup field),
+and a result that overturns a core assumption deserves a power check before
+it is acted on, not after.
+
 ### What is deliberately not measured
 
 Field strength. Max-entries-per-user is the visible proxy — 150-max

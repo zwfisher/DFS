@@ -126,6 +126,51 @@ That last step is the point of the whole project. On a typical slate,
 lineups selected by ROI project **fewer** points than lineups selected by
 projection but win two to four times as often.
 
+### Does stacking actually pay? Measured, not assumed.
+
+MLB is not football. There is no quarterback-to-receiver link where one
+play scores two players directly, and same-team hitter correlation comes
+out around **+0.10** — far below what the football analogy suggests. So
+"stack in MLB GPPs" is worth testing rather than inheriting.
+
+`tools/stacking_value.py` runs it: one slate, one simulation, one field,
+two candidate pools — one stacked, one capped at two hitters per team with
+no stack constraint — priced through the same payout curves.
+
+| | real 8-game slate | synthetic fixture |
+|---|---|---|
+| stacked mean / p99.9 | 96.24 / 201.25 | 108.95 / 208.85 |
+| spread mean / p99.9 | 97.23 / 190.85 | 111.18 / 200.45 |
+| ROI edge, top-heavy GPP | **+35%** | **+15%** |
+| ROI edge, small GPP | **+21%** | **+34%** |
+| ROI edge, flat double-up | **−15%** | **−14%** |
+
+The trade is clean and it replicates: stacking **costs about a point of
+mean** and **buys about 4–5% at the 99.9th percentile**. Spread lineups
+score more on average; stacked lineups score more when it matters.
+
+Whether that is worth it is decided entirely by the payout curve. A
+top-heavy tournament pays for the 99.97th percentile and nothing else, so a
+5% tail gain becomes a 15–35% ROI gain. A double-up pays for clearing a
+threshold, where variance is pure cost — and stacking loses by 14–15% in
+both tests, the most consistent number in the table.
+
+**So stack for tournaments and do not stack for cash games.** For the
+latter set `max_hitters_per_team=2` and pass no stack shapes.
+
+Two honest limits. Both figures come from one real slate and one synthetic
+one, so trust the direction rather than the magnitudes. And part of
+stacking's edge here is defensive: the simulated field stacks 72% of the
+time, as real fields do, and a spread lineup cannot beat tens of thousands
+of stacked opponents when one team goes off.
+
+**On experiment power.** An early version of this run used 40 candidates
+and 3,000 simulations and reported stacking *losing* in all three contests.
+That was noise: 40 candidates leaves 37 after de-duplication, the top eight
+of 37 is a thin selection, and P(win) around 0.001 is barely resolvable at
+3,000 sims. The defaults (120 candidates, 8,000 sims, 12,000 field) are the
+minimum that gave a stable sign. Anything less can and did flip it.
+
 ## Validation
 
 `mlbdfs diagnose` checks the simulator against league aggregates it is never
@@ -262,6 +307,24 @@ ones.
 
 Still wait for the lineups when you can. This narrows the gap; it does not
 close it, and it cannot know about a scratch announced an hour before lock.
+
+### Late swap changes when "wait" means
+
+DraftKings MLB allows late swap — every draftable carries
+`isSwappable: true` — so a player whose game has not started can be
+replaced *after* the contest locks. The rule is therefore not "your lineup
+must be right at contest lock" but **"each player must be right at his own
+game's first pitch."**
+
+How much that helps depends entirely on how spread the slate is. The
+8-game main slate of 2026-08-16 started 17:35, 17:37, 17:40 and 18:10 UTC
+— a 35-minute window, so almost no swap room, and waiting for lineups is
+the only protection. A slate running from 1pm to 10pm ET is the opposite:
+enter early, then fix scratches all afternoon.
+
+This is also why small contests fill hours before lock, which otherwise
+looks irrational. Late swap makes entering early nearly free, and a 20-max
+contest of 1,783 entries needs only 89 accounts to fill.
 
 ## Picking the contest
 
@@ -429,6 +492,7 @@ mlbdfs/
   ownership/         conditional logit, Dirichlet draws, field, logger
   optimize/          CP-SAT lineups, contest payouts, ROI and portfolio
 tools/diagnose_sim.py   simulator realism battery
+tools/stacking_value.py stacked versus spread, priced by payout shape
 tests/                  120 offline tests
 ```
 
