@@ -25,6 +25,42 @@ def _show(frame: pd.DataFrame, n: int | None = None) -> None:
         print((frame.head(n) if n else frame).to_string(index=False))
 
 
+def _slate_from_draft_group(draft_group: int) -> tuple:
+    """Salaries, pitcher hands and probable starters, straight from the API.
+
+    The draftables feed carries three things the CSV export does not: an
+    injury status, throwing hand, and each player's opposing probable
+    starter. Filtering on the first is the important one -- a slate export
+    lists everyone on the 40-man, and an IL bat is a guaranteed zero that
+    the optimizer will happily roster if it looks cheap enough.
+    """
+    from .data import lobby as dk_lobby
+
+    frame = dk_lobby.fetch_draftables(draft_group)
+    if frame.empty:
+        raise SystemExit(f"draft group {draft_group} returned no players")
+
+    starters_frame = dk_lobby.probable_starters(frame)
+    out = frame[~frame["status"].isin(["IL", "OUT"])].copy()
+    dropped = len(frame) - len(out)
+    if dropped:
+        print(f"dropped {dropped} players listed IL or OUT")
+
+    hands = {
+        str(r.dk_id): r.throws
+        for r in out.itertuples()
+        if r.is_pitcher and r.throws
+    }
+    starters = {
+        r.team: str(r.dk_id)
+        for r in starters_frame.itertuples()
+        if str(r.dk_id) in set(out["dk_id"].astype(str))
+    }
+    keep = ["dk_id", "name", "salary", "team", "positions", "is_pitcher",
+            "away", "home", "opponent"]
+    return out[keep].reset_index(drop=True), hands, starters
+
+
 def _load_real_slate(args) -> tuple:
     """Assemble a slate and rate book from DraftKings plus live data."""
     from .data import ids, sources
@@ -32,15 +68,23 @@ def _load_real_slate(args) -> tuple:
     from .projections.build import rate_book_from_counts
     from .projections.projected_lineups import apply_to_slate
 
-    salaries = parse_salaries(args.slate)
     game_date = (
         datetime.strptime(args.date, "%Y-%m-%d").date() if args.date else date.today()
     )
+    draft_group = getattr(args, "draft_group", None)
+    if draft_group:
+        salaries, hand_by_dk_id, starters = _slate_from_draft_group(draft_group)
+        slate_name = f"dg{draft_group}"
+    else:
+        salaries = parse_salaries(args.slate)
+        hand_by_dk_id = {}
+        slate_name = Path(args.slate).stem
 
     print(f"{len(salaries)} players, {salaries['team'].nunique()} teams")
 
-    probables = sources.probable_pitchers(game_date)
-    starters = infer_starters(salaries, probables)
+    if not draft_group:
+        probables = sources.probable_pitchers(game_date)
+        starters = infer_starters(salaries, probables)
     print(f"{len(starters)} announced starters matched")
 
     lineups = sources.confirmed_lineups(game_date)
@@ -61,7 +105,7 @@ def _load_real_slate(args) -> tuple:
         lineups=dk_lineups,
         starters=starters,
         team_totals=totals,
-        name=Path(args.slate).stem,
+        name=slate_name,
     )
 
     seasons = [game_date.year - 1, game_date.year]
@@ -87,10 +131,16 @@ def _load_real_slate(args) -> tuple:
     hands = sources.pitcher_handedness(game_date.year)
     hand_by_mlbam = dict(zip(hands["player_id"], hands["throws"]))
     for player in slate.players:
-        if player.is_pitcher:
-            mlbam = id_map.get(player.player_id)
-            if mlbam in hand_by_mlbam:
-                player.throws = hand_by_mlbam[mlbam]
+        if not player.is_pitcher:
+            continue
+        # DraftKings publishes handedness on the draftables feed, and it is
+        # the more current of the two -- prefer it when we have it.
+        if player.player_id in hand_by_dk_id:
+            player.throws = hand_by_dk_id[player.player_id]
+            continue
+        mlbam = id_map.get(player.player_id)
+        if mlbam in hand_by_mlbam:
+            player.throws = hand_by_mlbam[mlbam]
 
     splits = None
     try:
@@ -173,9 +223,39 @@ def cmd_project(args) -> int:
     return 0
 
 
+def _resolve_contest(args):
+    """A real DraftKings contest when one is named, otherwise a shape.
+
+    The synthetic curves in ``optimize.contest`` are the right thing for a
+    demo and the wrong thing for a decision -- absolute ROI is only as
+    honest as the payout table it was computed against.
+    """
+    contest_id = getattr(args, "contest_id", None)
+    if not contest_id:
+        return CONTESTS[args.contest](args.entries, args.fee)
+
+    from .data import lobby as dk_lobby
+
+    payload = dk_lobby.fetch_lobby(getattr(args, "sport", "MLB"))
+    rows = dk_lobby.lobby_contests(payload)
+    match = rows[rows["contest_id"] == contest_id]
+    if match.empty:
+        raise SystemExit(f"contest {contest_id} is not in the {args.sport} lobby")
+    bands = dk_lobby.fetch_payouts(contest_id)
+    if bands.empty:
+        raise SystemExit(f"contest {contest_id} publishes no cash payouts")
+    contest = dk_lobby.to_contest(match.iloc[0], bands)
+    print(
+        f"contest: {contest.name} -- ${contest.entry_fee:,.2f} entry, "
+        f"{contest.n_entries:,} max entries, rake {contest.rake:.1%}, "
+        f"{contest.max_entries_per_user} per user"
+    )
+    return contest
+
+
 def cmd_optimize(args) -> int:
     slate, book = _load_real_slate(args)
-    contest = CONTESTS[args.contest](args.entries, args.fee)
+    contest = _resolve_contest(args)
     result = run_pipeline(
         slate,
         book,
@@ -333,6 +413,62 @@ def _report(result, args) -> None:
         print(f"\nwrote {args.out}")
 
 
+def cmd_contests(args) -> int:
+    from .data import lobby as dk_lobby
+    from .optimize import screen as sc
+
+    payload = dk_lobby.fetch_lobby(args.sport)
+    groups = dk_lobby.draft_groups(payload)
+
+    if args.date:
+        on = datetime.strptime(args.date, "%Y-%m-%d").date()
+        groups = groups[groups["start_et"].dt.date == on]
+    if args.classic_only:
+        groups = groups[groups["game_type_id"] == 2]
+
+    print("-- slates --")
+    _show(groups)
+
+    if not args.draft_group:
+        print("\npick one with --draft-group to screen its contests")
+        return 0
+
+    contests = dk_lobby.lobby_contests(payload, args.draft_group)
+    if contests.empty:
+        print(f"\nno contests posted for draft group {args.draft_group}")
+        return 0
+
+    keep = contests[
+        (contests["prize_pool"] >= args.min_pool)
+        & (contests["entry_fee"].between(args.min_fee, args.max_fee))
+        & (~contests["name"].str.contains("Satellite|Qualifier", case=False))
+    ]
+    if args.max_entries_per_user:
+        keep = keep[keep["max_entries_per_user"] <= args.max_entries_per_user]
+
+    payouts = {}
+    for contest_id in keep["contest_id"]:
+        try:
+            payouts[int(contest_id)] = dk_lobby.fetch_payouts(int(contest_id))
+        except Exception as exc:  # one bad contest should not sink the screen
+            print(f"payouts unavailable for {contest_id}: {exc}")
+
+    scored = sc.screen(keep, payouts).sort_values("breakeven_rank", ascending=False)
+    cols = [
+        "contest_id", "name", "entry_fee", "max_entries", "max_entries_per_user",
+        "rake", "fill", "overlay_now", "pay_rate", "top_share", "min_cash_multiple",
+        "breakeven_rank", "edge_sharpe",
+    ]
+    cols = [c for c in cols if c in scored.columns]
+    print(f"\n-- contests, draft group {args.draft_group} --")
+    _show(scored[cols].round(4), args.top)
+
+    if args.out:
+        scored.to_csv(args.out, index=False)
+        print(f"\nwrote {args.out}")
+    return 0
+
+
 def cmd_diagnose(args) -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from tools.diagnose_sim import main as diagnose
@@ -380,7 +516,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_common(p, with_slate: bool = True):
         if with_slate:
-            p.add_argument("--slate", required=True, help="DraftKings salary CSV")
+            src = p.add_mutually_exclusive_group(required=True)
+            src.add_argument("--slate", help="DraftKings salary CSV")
+            src.add_argument(
+                "--draft-group",
+                type=int,
+                dest="draft_group",
+                help="DraftKings draft group id (see `mlbdfs contests`); "
+                     "pulls salaries, handedness and probables from the API",
+            )
             p.add_argument("--date", help="slate date, YYYY-MM-DD (default today)")
             p.add_argument("--totals", help="CSV of team,total Vegas implied runs")
             p.add_argument(
@@ -395,6 +539,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_contest(p):
         p.add_argument("--contest", choices=sorted(CONTESTS), default="large_gpp")
+        p.add_argument(
+            "--contest-id", type=int, dest="contest_id",
+            help="a real DraftKings contest id; its published payout curve "
+                 "replaces --contest/--entries/--fee",
+        )
+        p.add_argument("--sport", default="MLB", help=argparse.SUPPRESS)
         p.add_argument("--entries", type=int, default=50_000)
         p.add_argument("--fee", type=float, default=5.0)
         p.add_argument("--field", type=int, default=20_000)
@@ -429,6 +579,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--username", help="your DraftKings name, to isolate your entries")
     p.add_argument("--projected", help="CSV from `project`, to score ownership accuracy")
     p.set_defaults(func=cmd_backtest)
+
+    p = sub.add_parser(
+        "contests", help="list DraftKings slates and screen their contests"
+    )
+    p.add_argument("--sport", default="MLB")
+    p.add_argument("--date", help="slate date, YYYY-MM-DD")
+    p.add_argument("--draft-group", type=int, dest="draft_group")
+    p.add_argument("--classic-only", action="store_true", default=True)
+    p.add_argument(
+        "--all-game-types", action="store_false", dest="classic_only",
+        help="include Showdown, Tiers and Snake slates",
+    )
+    p.add_argument("--min-pool", type=float, default=700.0)
+    p.add_argument("--min-fee", type=float, default=0.0)
+    p.add_argument("--max-fee", type=float, default=1e9)
+    p.add_argument(
+        "--max-entries-per-user", type=int, default=0,
+        help="keep only contests capped at this many entries per user",
+    )
+    p.add_argument("--top", type=int, default=30)
+    p.add_argument("--out", help="write the screen to this CSV")
+    p.set_defaults(func=cmd_contests)
 
     p = sub.add_parser("diagnose", help="check the simulator against league aggregates")
     p.add_argument("--games", type=int, default=8)

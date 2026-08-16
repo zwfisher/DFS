@@ -212,6 +212,19 @@ any contest size.
 this silently deflated every non-out outcome by 3% and cost half a run per
 game. There is now an assertion at import.
 
+**Arizona had no lineup history, on every slate.** Statcast spells the club
+`AZ` and DraftKings spells it `ARI`, so the join found nothing and all nine
+Arizona hitters silently fell back to the salary-rank guess. It looked
+exactly like a team whose lineup had not posted. Both sides now go through
+the same normalizer.
+
+**A bullpen game cost the opposing team its whole lineup projection.**
+Probable starters were matched only against pitchers DraftKings flags `SP`,
+but an opener or a converted reliever is listed `RP` and is still starting.
+Missing him does not merely lose that pitcher — the *other* team's projected
+lineup is conditioned on his throwing hand, so nine hitters lose their
+batting order. Two of sixteen teams on a real slate hit this.
+
 **A hook model with no lookahead.** Checking the pitch limit only after an
 inning completes means a starter always finishes the inning that crosses his
 limit, running two thirds of an inning deep. The manager is deciding whether
@@ -424,6 +437,63 @@ because most players on a slate are owned near zero and predicting near zero
 is close for them. The chalk breaks, and the chalk is the part that matters.
 `implied_field_mean` caught it -- 50.8 against 76.5 from real ownership --
 which is what a feasibility identity is for.
+
+## Contest selection is a separate optimization
+
+Everything above optimizes the lineup given a contest. The contest itself is
+a decision made earlier, with better information and no simulation required,
+and on the current DraftKings MLB lobby it moves expected return further
+than most lineup changes do.
+
+The arithmetic is trivial and worth stating precisely because it is easy to
+carry a vague version of it. Let `s` be the fraction of the prize pool an
+entrant captures and `N` the field size. Expected return per entry is
+`(1 - rake) · s · N`, so breaking even requires capturing `1 / (1 - rake)`
+times an equal share. Rake is a fixed multiplicative drag on whatever edge
+the rest of the project produces; nothing downstream can recover it.
+
+DraftKings prices rake by buy-in, monotonically, from 15.9% at a dollar to
+5.7% above a thousand. Measured, not assumed — `mlbdfs contests` computes it
+from the lobby's own numbers, and the lobby figure agrees with the published
+payout bands to the cent on every contest checked.
+
+### The lobby field names are a trap
+
+`m` is the maximum field size and `nt` is entries so far. Read the wrong way
+round, rake inverts and every screen output is confidently backwards. There
+is a test asserting the $15K mini-MAX comes out at DraftKings' published
+15.9%, which is the cheapest possible guard against that.
+
+### What a payout curve is actually for
+
+Two contests with identical rake are not equivalent. A flat double-up pays
+for clearing a threshold; a top-heavy tournament pays almost entirely for
+the top thousandth. `breakeven_rank_factor` collapses rake and shape into
+one comparable number by asking what proportional rank improvement pays for
+the rake: 0.87 for a double-up on this slate, 0.76 for the $150K Bat Flip.
+
+That model assumes skill lifts an entrant a constant *fraction* of the way
+up the field, which is the assumption least favourable to tournaments,
+because the edge this project builds is deliberately tail-concentrated —
+correlated stacks buy right-tail outcomes specifically. So the number is the
+bar for a *generic* edge, and the honest way to settle a top-heavy contest
+is to run the portfolio against its real published curve, which
+`optimize --contest-id` now does.
+
+`edge_sharpe` is the counterweight, and it is the number most likely to
+change behaviour: roughly `1/sharpe²` entries are needed before the edge is
+one standard error from zero, which for the Bat Flip is about 85,000. An
+edge can be real and remain invisible for a full season.
+
+### What is deliberately not measured
+
+Field strength. Max-entries-per-user is the visible proxy — 150-max
+contests let a few professionals blanket the roster space, single-entry
+contests give them one bullet — but the size of that effect is not in the
+lobby data, and a fabricated coefficient would be worse than naming the
+gap. The same applies to duplication: `evaluate_lineups` assumes no ties, so
+pot-splitting is unpriced, and it is unpriced in exactly the place it hurts
+most, which is a small slate where the winning lineup is not unique.
 
 ## What to do next
 

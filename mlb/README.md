@@ -19,14 +19,23 @@ mlbdfs diagnose             # check the simulator against league aggregates
 pytest                      # 92 tests, all offline
 ```
 
-A real slate needs a DraftKings salary export:
+A real slate comes straight off DraftKings' API — no CSV export needed:
 
 ```bash
-mlbdfs project  --slate DKSalaries.csv --date 2026-08-12
-mlbdfs optimize --slate DKSalaries.csv --date 2026-08-12 \
-                --contest large_gpp --entries 50000 --fee 5 \
+mlbdfs contests --date 2026-08-16                        # what slates exist
+mlbdfs contests --date 2026-08-16 --draft-group 152178   # screen its contests
+
+mlbdfs project  --draft-group 152178
+mlbdfs optimize --draft-group 152178 --contest-id 193832694 \
                 --lineups 20 --out lineups.csv
 ```
+
+`--draft-group` pulls salaries, positions, handedness, injury status and each
+team's probable starter in one request. `--contest-id` replaces the synthetic
+payout shape with the contest's *published* payout table, which is what makes
+the ROI numbers mean anything. A salary CSV still works via `--slate`, but it
+carries none of that, and in particular it does not carry injury status —
+the export lists the whole 40-man and an IL bat is a guaranteed zero.
 
 **Run it after batting orders post**, usually one to three hours before
 first pitch. `optimize` refuses a slate whose lineups are mostly unposted
@@ -227,6 +236,65 @@ ones.
 
 Still wait for the lineups when you can. This narrows the gap; it does not
 close it, and it cannot know about a scratch announced an hour before lock.
+
+## Picking the contest
+
+Which tournament you enter is a separate decision from which lineups you
+build, it is made before the slate starts, and on DraftKings' current MLB
+lobby it is worth more than most lineup tweaks. `mlbdfs contests` scores
+every contest on a slate.
+
+**Rake is the one certain lever.** An exactly-average player captures their
+fair share `1/N` of the prize pool and loses the rake, so breaking even
+means capturing `1 / (1 - rake)` times fair share. DraftKings prices that
+by buy-in, and the gradient is steep and monotone — measured across the
+guaranteed Classic MLB contests in one lobby pull:
+
+| buy-in | contests | median rake | must capture |
+|---|---|---|---|
+| ≤ $0.50 | 6 | 15.9% | 1.189x fair share |
+| $1 | 8 | 15.9% | 1.189x |
+| $2–5 | 17 | 15.7% | 1.187x |
+| $6–20 | 12 | 15.0% | 1.176x |
+| $21–100 | 32 | 11.4% | 1.129x |
+| $101–1,000 | 12 | 9.8% | 1.109x |
+| > $1,000 | 3 | 5.7% | 1.060x |
+
+Playing at $20 instead of $1 hands back about 5 points of edge before a
+single lineup is built. That is not an argument for playing above your
+bankroll — it is an argument for knowing what the cheap seats cost.
+
+**Overlay is the only free money.** A guaranteed pool is paid whether the
+contest fills or not, so a contest that locks under-filled has a *negative*
+rake. `overlay_now` reports the shortfall at the current fill; it only
+means something in the last hour, because almost everything fills.
+
+**Payout shape decides what kind of edge gets paid.** `breakeven_rank`
+folds rake and shape into one number: multiply your finishing rank by it
+and you break even. On the same slate, a double-up asks for 0.87 (finish
+13% higher up the field than chance) and the top-heavy Bat Flip asks for
+0.76. The shape assumption behind it — that skill lifts you a constant
+*fraction* of the way up the field — is the one least kind to tournaments,
+because a real MLB GPP edge is concentrated in the right tail where
+correlated stacks live. So read `breakeven_rank` as the bar for a generic
+edge, and let simulated ROI against the actual payout curve
+(`optimize --contest-id`) settle the top-heavy ones.
+
+**`edge_sharpe` is the bankroll warning.** It is expected profit over its
+standard deviation per entry; roughly `1/sharpe²` entries are needed before
+the edge clears one standard error. For the $150K Bat Flip that is about
+85,000 entries. The edge can be real and still invisible for a season.
+
+**Max entries per user is the field-strength proxy.** In a 150-max contest
+a handful of professionals field thousands of lineups and blanket the
+sensible roster space; in a single-entry contest they get one bullet each.
+The screen reports the rule and deliberately does not put a number on the
+effect — that number is not in the lobby data.
+
+One caveat that matters more on small slates than large: `evaluate_lineups`
+assumes no ties, so pot-splitting is unpriced. On a two-game slate the
+winning lineup is frequently duplicated and first place is split several
+ways, which the ROI figure does not know about.
 
 ## Things to know before trusting the output
 

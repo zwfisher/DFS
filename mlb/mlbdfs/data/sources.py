@@ -308,10 +308,18 @@ def _extract_lineups(pbp: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"play-by-play is missing columns: {sorted(missing)}")
 
+    from .dk import normalize_team
+
     df = pbp[list(needed)].copy()
     top = df["inning_topbot"].astype(str).str.lower().str.startswith("top")
-    df["team"] = np.where(top, df["away_team"], df["home_team"])
-    df["opponent"] = np.where(top, df["home_team"], df["away_team"])
+    # Through the same normalizer DraftKings abbreviations use, or the two
+    # sides fail to join for the handful of clubs they spell differently.
+    df["team"] = pd.Series(
+        np.where(top, df["away_team"], df["home_team"]), index=df.index
+    ).map(normalize_team)
+    df["opponent"] = pd.Series(
+        np.where(top, df["home_team"], df["away_team"]), index=df.index
+    ).map(normalize_team)
 
     # Batting order: rank each hitter by the first plate appearance he takes.
     first_pa = (

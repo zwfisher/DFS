@@ -33,6 +33,11 @@ TEAM_FIXES = {
     "SD": "SD", "SDP": "SD", "SF": "SF", "SFG": "SF",
     "TB": "TB", "TBR": "TB", "KC": "KC", "KCR": "KC",
     "LA": "LAD", "LAD": "LAD",
+    # Statcast says AZ where DraftKings says ARI. Left unmapped, Arizona
+    # silently gets no lineup history and falls back to the salary guess --
+    # a whole team quietly downgraded on every slate they play.
+    "AZ": "ARI", "ARI": "ARI",
+    "OAK": "ATH", "ATH": "ATH",
 }
 
 GAME_INFO_RE = re.compile(r"^\s*([A-Z]{2,3})@([A-Z]{2,3})")
@@ -112,23 +117,17 @@ def _collapse_multi_position(frame: pd.DataFrame) -> pd.DataFrame:
     if frame["dk_id"].is_unique:
         return frame
 
-    merged = (
-        frame.groupby("dk_id", as_index=False)
-        .agg(
-            {
-                "name": "first",
-                "salary": "first",
-                "team": "first",
-                "opponent": "first",
-                "away": "first",
-                "home": "first",
-                "is_pitcher": "any",
-                "positions": lambda vals: tuple(
-                    dict.fromkeys(p for row in vals for p in row)
-                ),
-            }
-        )
-    )
+    how: dict[str, object] = {}
+    for col in frame.columns:
+        if col == "dk_id":
+            continue
+        if col == "positions":
+            how[col] = lambda vals: tuple(dict.fromkeys(p for row in vals for p in row))
+        elif frame[col].dtype == bool:
+            how[col] = "any"
+        else:
+            how[col] = "first"
+    merged = frame.groupby("dk_id", as_index=False).agg(how)
     return merged[frame.columns]
 
 
