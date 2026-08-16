@@ -306,6 +306,7 @@ def cmd_optimize(args) -> int:
         # export. Without it the simulated field sits near league average and
         # every ROI comes out inflated.
         field_mean_score=getattr(args, "field_mean", None),
+        deterministic=getattr(args, "deterministic", False),
     )
     if getattr(args, "compare_contests", None):
         _compare_contests(args, result)
@@ -610,6 +611,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help=argparse.SUPPRESS)
         p.add_argument("--max-fee", type=float, default=1e9,
                        help=argparse.SUPPRESS)
+        p.add_argument(
+            "--deterministic", action="store_true",
+            help="reproducible candidate pool from the seed, at roughly 3.5x "
+                 "the solve time (CP-SAT's parallel search is not)",
+        )
         p.add_argument(
             "--field-mean", type=float, dest="field_mean",
             help="average score of a field lineup in contests you enter "

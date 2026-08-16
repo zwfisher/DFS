@@ -295,6 +295,17 @@ class OptimizerConfig:
     mip_gap: float = 0.005
     solve_time_limit: int = 10  # seconds per lineup, a backstop not a target
     solver_workers: int = 8
+    # CP-SAT's parallel search is not reproducible: eight workers racing on
+    # a wall clock return different equally-good lineups run to run, so the
+    # same seed does not give the same candidate pool. Measured on an
+    # 8-game slate, 40 candidates: 7.2s with eight workers, 25.1s with one.
+    # Setting max_deterministic_time does *not* fix it -- only a single
+    # worker does, which was checked rather than assumed.
+    #
+    # The default is speed, because the pool is a sample of good lineups
+    # rather than a canonical answer and a different draw of it is not a
+    # worse one. Turn this on to compare two runs, or to chase a bug.
+    deterministic: bool = False
 
 
 OPTIMIZER = OptimizerConfig()

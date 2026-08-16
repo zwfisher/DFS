@@ -153,6 +153,15 @@ Pricing one portfolio into many contests costs roughly one evaluation, not
 one per contest: ranking against the field is the expensive part and does
 not depend on the payout curve, so `compare_contests` computes it once.
 
+**The candidate pool is not reproducible by default.** CP-SAT's parallel
+search returns different equally-good lineups run to run, so the same seed
+gives a different pool — measured on an 8-game slate at 40 candidates, 7.2s
+with eight workers against 25.1s with one. Setting a deterministic time
+limit does not fix it; only a single worker does. `--deterministic` buys
+reproducibility at that 3.5x, which is worth it for comparing two runs and
+not worth it otherwise, since a different draw of a sampled pool is not a
+worse one.
+
 ## Wait for lineups
 
 This is the most important operational rule in the project, and it is here

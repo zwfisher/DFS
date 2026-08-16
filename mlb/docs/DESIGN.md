@@ -240,6 +240,15 @@ below one. Measured on a real 8-game slate, the fix moves the mean projected
 starter from 7.18 points to 6.17 — a 14% overstatement of every guessed
 hitter. `resolve_lineup` now keys on `Player.confirmed`.
 
+**The seed did not reproduce the run.** Two identical invocations produced
+different portfolios, which was noticed only because a refactor was being
+checked against a previous run and the numbers moved in the third decimal.
+CP-SAT with eight workers on a wall-clock limit returns different
+equally-good lineups; `max_deterministic_time` does not fix it and only
+`num_workers = 1` does, which was tested rather than assumed. The default
+stays fast — a different draw from a sampled pool is not a worse one — but
+it is now a named option rather than a surprise.
+
 **A hook model with no lookahead.** Checking the pitch limit only after an
 inning completes means a starter always finishes the inning that crosses his
 limit, running two thirds of an inning deep. The manager is deciding whether

@@ -273,11 +273,16 @@ class LineupOptimizer:
         objective -- a lineup within half a percent is indistinguishable in
         every way that matters, and the last sliver of the gap is where
         branch and bound spends most of its time.
+
+        ``cfg.deterministic`` trades roughly 3.5x runtime for a pool that is
+        reproducible from the seed; see the note on the config field.
         """
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = float(self.cfg.solve_time_limit)
         solver.parameters.relative_gap_limit = self.cfg.mip_gap
-        solver.parameters.num_workers = self.cfg.solver_workers
+        solver.parameters.num_workers = (
+            1 if self.cfg.deterministic else self.cfg.solver_workers
+        )
         solver.parameters.log_search_progress = self.cfg.solver_msg
         return solver
 

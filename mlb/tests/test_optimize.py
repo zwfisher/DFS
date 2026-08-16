@@ -327,3 +327,32 @@ def test_portfolio_respects_exposure_and_overlap(slate_sim, ownership, pool):
     for i, a in enumerate(chosen):
         for b in chosen[i + 1 :]:
             assert len(set(a.player_ids) & set(b.player_ids)) <= 7
+
+
+def test_deterministic_mode_reproduces_the_candidate_pool():
+    """Same seed, same pool -- which is not true of the default fast path.
+
+    CP-SAT's parallel search returns different equally-good lineups run to
+    run, so eight workers racing on a wall clock make the pool
+    irreproducible. Only a single worker fixes it; setting a deterministic
+    time limit does not.
+    """
+    from dataclasses import replace
+
+    from mlbdfs.config import OPTIMIZER
+    from mlbdfs.data.fixtures import make_slate
+    from mlbdfs.optimize.milp import LineupOptimizer
+    from mlbdfs.projections.build import build_sim_slate
+    from mlbdfs.sim.engine import simulate_slate
+
+    slate, book = make_slate(n_games=3, seed=2)
+    sim = simulate_slate(build_sim_slate(slate, book), n_sims=300, seed=2)
+    cfg = replace(OPTIMIZER, deterministic=True)
+
+    def pool():
+        built = LineupOptimizer(slate, cfg=cfg).generate_pool(
+            sim.scores, sim.player_ids, n_candidates=6, seed=2
+        )
+        return [tuple(sorted(lu.player_ids)) for lu in built]
+
+    assert pool() == pool()

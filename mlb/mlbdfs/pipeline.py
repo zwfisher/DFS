@@ -15,7 +15,7 @@ simulation and it is not optional.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -72,6 +72,7 @@ def run_pipeline(
     verbose: bool = True,
     allow_unconfirmed: bool = False,
     field_mean_score: float | None = None,
+    deterministic: bool = False,
 ) -> PipelineResult:
     """Run projections, ownership, field and optimization for one slate.
 
@@ -137,7 +138,10 @@ def run_pipeline(
     field = generate_field(slate, ownership, n_lineups=n_field, seed=seed)
 
     log(f"building candidate pool ({n_candidates} solves) ...")
-    optimizer = LineupOptimizer(slate)
+    # CP-SAT's parallel search is not reproducible; see OptimizerConfig.
+    optimizer = LineupOptimizer(
+        slate, cfg=replace(OPTIMIZER, deterministic=True) if deterministic else OPTIMIZER
+    )
     pool = optimizer.generate_pool(
         sim.scores, sim.player_ids, n_candidates=n_candidates, seed=seed
     )
