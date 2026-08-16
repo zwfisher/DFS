@@ -225,6 +225,21 @@ Missing him does not merely lose that pitcher — the *other* team's projected
 lineup is conditioned on his throwing hand, so nine hitters lose their
 batting order. Two of sixteen teams on a real slate hit this.
 
+**The start-probability model was switched off in every run that needed
+it.** `resolve_lineup` forced `start_probability = 1.0` on every hitter
+carrying a batting order. That is correct for a posted order and wrong for
+a projected one, and `projected_lineups.apply_to_slate` assigns a batting
+order to projected starters too — so the entire zero-risk model, validated
+over 498 team-games and documented with a calibration table, was overwritten
+before the simulator ever saw it. It only applied on slates run *after*
+lineups post, which are exactly the slates that do not need it.
+
+Nothing looked wrong: the salary-rank fallback still discounted the slots
+the projection had not filled, so some hitters did carry a probability
+below one. Measured on a real 8-game slate, the fix moves the mean projected
+starter from 7.18 points to 6.17 — a 14% overstatement of every guessed
+hitter. `resolve_lineup` now keys on `Player.confirmed`.
+
 **A hook model with no lookahead.** Checking the pitch limit only after an
 inning completes means a starter always finishes the inning that crosses his
 limit, running two thirds of an inning deep. The manager is deciding whether
@@ -485,6 +500,30 @@ change behaviour: roughly `1/sharpe²` entries are needed before the edge is
 one standard error from zero, which for the Bat Flip is about 85,000. An
 edge can be real and remain invisible for a full season.
 
+### Field calibration and the units it is measured in
+
+`target_field_mean_score` is set from the average score in contests you
+actually enter, which is the right instrument. But that average comes from
+lineups built on *posted* batting orders, and a slate run before lineups
+post discounts every hitter by his chance of not starting. The two are not
+on the same scale, and the difference is large: on the 8-game slate of
+2026-08-16 the mean projected starter is 6.17 points with the discount
+applied and 7.18 without.
+
+So a target of 98.8 taken from a real 35,671-entry contest is simply
+unreachable on an unconfirmed slate — the ownership model's reachable range
+there is 69.1 to 82.6, and `calibrate_to_field_strength` correctly warns and
+clamps. That warning is not evidence of a broken ownership model. It is a
+units mismatch, and the pipeline now says so before calibrating.
+
+Measured against that same real contest, the generated field sits 16 to 23
+points low at every quantile from the median out to the 99.9th, with roughly
+the right spread (sd 27.1 against 30.6). A near-constant offset with correct
+shape is the signature of a level problem, not a structural one, and it
+lines up with the separately observed ~16% projection shortfall. Until that
+is resolved, absolute ROI is not a number to act on; the ranking between
+candidate lineups is.
+
 ### What is deliberately not measured
 
 Field strength. Max-entries-per-user is the visible proxy — 150-max
@@ -507,10 +546,13 @@ In rough order of expected value:
    them; `mlbdfs fit-ownership` re-fits.
 2. **Fit the Dirichlet concentration** from realized residuals rather than
    a prior, which needs several slates.
-3. **Check the projection level.** On the one backtested slate, projections
-   ran about 16% below realized scoring for owned players. One slate of
-   actuals is far too noisy to recalibrate against, but it is worth watching
-   across several.
+3. **Check the projection level.** Now seen twice, independently: about 16%
+   below realized scoring for owned players on the one backtested slate, and
+   a 16-to-23-point shortfall at every quantile of the generated field
+   against a real contest's score distribution. Two noisy observations
+   agreeing is not proof, but it is enough to make this the most likely
+   single defect left in the projection layer. Resolving it is what would
+   make absolute ROI usable.
 3. **Backtest calibration.** `sim.engine.calibration_report` produces PIT
    values against realized scores; a flat histogram means the intervals are
    honest, U-shaped means too narrow. Worth running over a month of slates

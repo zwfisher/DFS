@@ -149,3 +149,40 @@ def test_pipeline_accepts_a_confirmed_slate():
         verbose=False,
     )
     assert len(result.pool) >= 1
+
+
+def test_resolve_lineup_keeps_a_projected_start_probability():
+    """The zero-risk model must survive the trip into the simulator.
+
+    ``resolve_lineup`` used to force every hitter carrying a batting order
+    to ``start_probability = 1.0``, which is right for a posted lineup and
+    wrong for a projected one -- and it silently disabled the entire
+    start-probability model on precisely the slates it was built for.
+    """
+    from mlbdfs.data.fixtures import make_slate
+    from mlbdfs.projections.lineups import resolve_lineup
+
+    slate, _ = make_slate(n_games=2, seed=5)
+    team = slate.teams[0]
+
+    for player in slate.lineup_for(team):
+        player.confirmed = False
+        player.start_probability = 0.83
+
+    resolved = resolve_lineup(slate, team)
+    assert len(resolved) == 9
+    assert all(p.start_probability == pytest.approx(0.83) for p in resolved)
+
+
+def test_resolve_lineup_still_trusts_a_posted_order():
+    from mlbdfs.data.fixtures import make_slate
+    from mlbdfs.projections.lineups import resolve_lineup
+
+    slate, _ = make_slate(n_games=2, seed=5)
+    team = slate.teams[0]
+
+    for player in slate.lineup_for(team):
+        player.confirmed = True
+        player.start_probability = 0.5
+
+    assert all(p.start_probability == 1.0 for p in resolve_lineup(slate, team))

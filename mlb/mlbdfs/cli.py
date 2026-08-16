@@ -253,6 +253,41 @@ def _resolve_contest(args):
     return contest
 
 
+def _compare_contests(args, result) -> None:
+    """Score the finished portfolio through every contest on the slate.
+
+    The shape metrics in `mlbdfs contests` are what you can compute before
+    a slate exists. This is the version that knows what you built.
+    """
+    from .data import lobby as dk_lobby
+    from .optimize import screen as sc
+
+    draft_group = getattr(args, "draft_group", None)
+    payload = dk_lobby.fetch_lobby(getattr(args, "sport", "MLB"))
+    rows = dk_lobby.lobby_contests(payload, draft_group)
+    if rows.empty:
+        print("\nno lobby contests to compare against")
+        return
+
+    rows = rows[
+        (rows["prize_pool"] >= args.min_pool)
+        & (rows["entry_fee"].between(args.min_fee, args.max_fee))
+        & (~rows["name"].str.contains("Satellite|Qualifier", case=False))
+    ].head(args.compare_contests)
+
+    contests = []
+    for row in rows.to_dict("records"):
+        bands = dk_lobby.fetch_payouts(int(row["contest_id"]))
+        if not bands.empty:
+            contests.append(dk_lobby.to_contest(pd.Series(row), bands))
+    if not contests:
+        print("\nno contests with published cash payouts to compare against")
+        return
+
+    print(f"\n-- the same {len(result.selected)} lineups, priced into each contest --")
+    _show(sc.compare_contests(result, contests).round(4))
+
+
 def cmd_optimize(args) -> int:
     slate, book = _load_real_slate(args)
     contest = _resolve_contest(args)
@@ -266,7 +301,14 @@ def cmd_optimize(args) -> int:
         n_lineups=args.lineups,
         seed=args.seed,
         allow_unconfirmed=args.allow_unconfirmed,
+        # The single most important number for making ROI mean anything, and
+        # it is an observable: `mlbdfs backtest` prints it from a standings
+        # export. Without it the simulated field sits near league average and
+        # every ROI comes out inflated.
+        field_mean_score=getattr(args, "field_mean", None),
     )
+    if getattr(args, "compare_contests", None):
+        _compare_contests(args, result)
     _report(result, args)
     return 0
 
@@ -545,6 +587,24 @@ def build_parser() -> argparse.ArgumentParser:
                  "replaces --contest/--entries/--fee",
         )
         p.add_argument("--sport", default="MLB", help=argparse.SUPPRESS)
+        p.add_argument(
+            "--compare-contests", type=int, nargs="?", const=8, default=0,
+            dest="compare_contests", metavar="N",
+            help="after building the portfolio, price the same lineups into "
+                 "the N largest contests on the slate (needs --draft-group)",
+        )
+        p.add_argument("--min-pool", type=float, default=700.0,
+                       help=argparse.SUPPRESS)
+        p.add_argument("--min-fee", type=float, default=0.0,
+                       help=argparse.SUPPRESS)
+        p.add_argument("--max-fee", type=float, default=1e9,
+                       help=argparse.SUPPRESS)
+        p.add_argument(
+            "--field-mean", type=float, dest="field_mean",
+            help="average score of a field lineup in contests you enter "
+                 "(`mlbdfs backtest` prints it); calibrates field strength, "
+                 "without which ROI is inflated",
+        )
         p.add_argument("--entries", type=int, default=50_000)
         p.add_argument("--fee", type=float, default=5.0)
         p.add_argument("--field", type=int, default=20_000)

@@ -71,6 +71,7 @@ def run_pipeline(
     seed: int = 1,
     verbose: bool = True,
     allow_unconfirmed: bool = False,
+    field_mean_score: float | None = None,
 ) -> PipelineResult:
     """Run projections, ownership, field and optimization for one slate.
 
@@ -110,11 +111,22 @@ def run_pipeline(
     holdout = simulate_slate(sim_slate, n_sims=n_sims, seed=seed + 9973)
 
     log("projecting ownership ...")
-    target = OWNERSHIP.target_field_mean_score
+    target = field_mean_score or OWNERSHIP.target_field_mean_score
     if target:
         # Tie ownership concentration to how strong the opposition actually
         # is. Skipping this leaves the field near league average, and every
         # ROI number comes out inflated against it.
+        #
+        # But the two sides have to be on the same scale. A target read off
+        # a settled contest is the average of lineups built from *posted*
+        # batting orders, while an unconfirmed slate discounts every hitter
+        # by his chance of not starting. The target is then unreachable by
+        # construction, calibration clamps, and the gap is a units mismatch
+        # rather than a modelling error.
+        if share < MIN_CONFIRMED_LINEUP_SHARE:
+            log("  NOTE: the field-mean target is on the confirmed-lineup "
+                "scale and this slate is not; expect calibration to clamp, "
+                "and read ROI as a ranking rather than a level.")
         raw, temperature = calibrate_to_field_strength(slate, sim, target)
         log(f"  calibrated to a field mean of {target} (temperature {temperature:.2f})")
     else:

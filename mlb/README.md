@@ -228,6 +228,13 @@ before the card is posted:
 | ≥ 0.90 | 93.5% |
 | ≥ 0.95 | 93.7% |
 
+That discount is not cosmetic. On a real 8-game slate it moves the mean
+projected starter from 7.18 points to 6.17 — and until recently
+`resolve_lineup` overwrote it with 1.0, so the whole model was inert on
+exactly the slates it exists for. Anything you compare a discounted
+projection against has to be discounted too; see the field-calibration note
+in `docs/DESIGN.md`.
+
 At roughly 13 points per zero, rostering eight hitters at 0.90 costs about
 half a zero per lineup against waiting for confirmation. That is real but
 survivable; it is not nothing. Set `OPTIMIZER.min_start_probability` (0.80
@@ -309,6 +316,13 @@ silently corrupts every layer above it and no test can catch it.
 strong the simulated field is, which is set by the ownership model — see
 below. Rankings between candidate lineups are far more trustworthy than the
 ROI numbers themselves.
+
+Measured against a real 35,671-entry contest, the generated field comes in
+16 to 23 points low at every quantile from the median out to the 99.9th,
+with roughly the right spread. Some of that is a scale mismatch — the real
+contest locked with posted lineups while an early run discounts every hitter
+by his chance of not starting — and some of it is the projection shortfall
+in the next section. Either way, the ROI *level* is not a number to act on.
 
 **Ownership is now fitted, on one slate.** The weights come from maximum
 likelihood against a real 35,671-entry contest rather than from guesses, and

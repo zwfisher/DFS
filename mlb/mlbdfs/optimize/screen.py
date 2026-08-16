@@ -155,6 +155,50 @@ def overlay(row: pd.Series) -> float:
     return max(0.0, float(row["prize_pool"]) - collected)
 
 
+def compare_contests(result, contests: list[Contest]) -> pd.DataFrame:
+    """Run one already-built portfolio through several real payout curves.
+
+    :func:`screen` ranks contests on shape alone, which is all you can do
+    before the slate exists. This is the version that knows what you are
+    actually entering: the same lineups, the same simulated field, scored
+    through each contest's published payout table. Where the two disagree,
+    believe this one -- a portfolio built out of correlated stacks has a
+    tail-heavy score distribution, and shape-only metrics cannot see that.
+
+    Evaluation runs on the holdout simulation, not the one the pool was
+    built against, for the usual reason.
+    """
+    from .portfolio import evaluate_lineups
+
+    # ``selected.lineup`` is 1-indexed, matching evaluate_lineups' output.
+    keep = set(int(n) for n in result.selected["lineup"])
+    lineups = [lu for i, lu in enumerate(result.pool, start=1) if i in keep]
+
+    rows = []
+    for contest in contests:
+        scored = evaluate_lineups(
+            lineups, result.holdout.scores, result.holdout.player_ids,
+            result.field, contest,
+        )
+        rows.append(
+            {
+                "contest": contest.name,
+                "entry_fee": contest.entry_fee,
+                "entries": contest.n_entries,
+                "rake": contest.rake,
+                "roi": float(scored["roi"].mean()),
+                "best_roi": float(scored["roi"].max()),
+                "p_win": float(scored["p_win"].mean()),
+                "p_cash": float(scored["p_cash"].mean()),
+                "cost": contest.entry_fee * len(lineups),
+                "profit": float(
+                    (scored["roi"] * contest.entry_fee).sum()
+                ),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("profit", ascending=False)
+
+
 def screen(
     contests: pd.DataFrame,
     payouts: dict[int, pd.DataFrame] | None = None,

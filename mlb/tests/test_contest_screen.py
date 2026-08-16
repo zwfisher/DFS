@@ -270,3 +270,30 @@ def test_to_contest_carries_the_published_bands():
     assert contest.n_entries == 862
     assert contest.max_entries_per_user == 20
     assert contest.total_prizes == pytest.approx(1500.0)
+
+
+def test_compare_contests_prices_one_portfolio_into_several_curves():
+    """The same lineups are worth different amounts in different contests."""
+    from mlbdfs.data.fixtures import make_slate
+    from mlbdfs.pipeline import run_pipeline
+
+    slate, book = make_slate(n_games=4, seed=3)
+    result = run_pipeline(
+        slate, book, n_sims=400, n_field=600, n_candidates=12, n_lineups=4,
+        seed=3, verbose=False, allow_unconfirmed=True,
+    )
+    table = screen.compare_contests(
+        result, [double_up(2_000, 5.0), large_gpp(2_000, 5.0)]
+    )
+
+    assert list(table["contest"]) != []
+    assert set(table["contest"]) == {"double_up", "large_gpp"}
+    # Only the portfolio, not the whole candidate pool. Exposure caps can
+    # cut the portfolio short of the requested count, so compare to what
+    # was actually selected.
+    assert len(result.selected) < len(result.pool)
+    assert (table["cost"] == len(result.selected) * 5.0).all()
+    # A flat contest cashes far more often than a top-heavy one.
+    flat = table.set_index("contest").loc["double_up"]
+    gpp = table.set_index("contest").loc["large_gpp"]
+    assert flat["p_cash"] > gpp["p_cash"]

@@ -90,7 +90,13 @@ def resolve_lineup(slate: Slate, team: str, fill_missing: bool = True) -> list[P
     """
     lineup = slate.lineup_for(team)
     for p in lineup:
-        p.start_probability = 1.0
+        # Only a *posted* batting order makes a start certain. A projected
+        # one carries a start probability from
+        # ``projections.projected_lineups``, and overwriting it here would
+        # silently switch off the entire zero-risk model on exactly the
+        # slates it exists for -- the ones run before lineups post.
+        if p.confirmed:
+            p.start_probability = 1.0
 
     if len(lineup) > 9:
         # More than nine hitters carry a batting order, which means two
