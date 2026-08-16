@@ -236,18 +236,16 @@ def _resolve_contest(args):
 
     from .data import lobby as dk_lobby
 
-    payload = dk_lobby.fetch_lobby(getattr(args, "sport", "MLB"))
-    rows = dk_lobby.lobby_contests(payload)
-    match = rows[rows["contest_id"] == contest_id]
-    if match.empty:
-        raise SystemExit(f"contest {contest_id} is not in the {args.sport} lobby")
-    bands = dk_lobby.fetch_payouts(contest_id)
-    if bands.empty:
-        raise SystemExit(f"contest {contest_id} publishes no cash payouts")
-    contest = dk_lobby.to_contest(match.iloc[0], bands)
+    try:
+        contest = dk_lobby.fetch_contest(contest_id)
+        detail = dk_lobby.contest_detail(contest_id)
+    except Exception as exc:
+        raise SystemExit(f"could not load contest {contest_id}: {exc}") from exc
+
+    filled = int(detail.get("entries") or 0)
     print(
         f"contest: {contest.name} -- ${contest.entry_fee:,.2f} entry, "
-        f"{contest.n_entries:,} max entries, rake {contest.rake:.1%}, "
+        f"{filled:,}/{contest.n_entries:,} entries, rake {contest.rake:.1%}, "
         f"{contest.max_entries_per_user} per user"
     )
     return contest

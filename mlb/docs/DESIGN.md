@@ -509,29 +509,56 @@ change behaviour: roughly `1/sharpe²` entries are needed before the edge is
 one standard error from zero, which for the Bat Flip is about 85,000. An
 edge can be real and remain invisible for a full season.
 
-### Field calibration and the units it is measured in
+### The field-strength gap, and two wrong explanations for it
 
-`target_field_mean_score` is set from the average score in contests you
-actually enter, which is the right instrument. But that average comes from
-lineups built on *posted* batting orders, and a slate run before lineups
-post discounts every hitter by his chance of not starting. The two are not
-on the same scale, and the difference is large: on the 8-game slate of
-2026-08-16 the mean projected starter is 6.17 points with the discount
-applied and 7.18 without.
+A target of 98.8 — the mean entry score in a real 35,671-entry contest —
+cannot be reached by the ownership model. On the 8-game slate of
+2026-08-16 the reachable range is 66.0 to 82.0 and
+`calibrate_to_field_strength` clamps to 82.0. The generated field sits 16 to
+23 points below that contest at every quantile from the median to the
+99.9th, with roughly the right spread (sd 27.1 against 30.6).
 
-So a target of 98.8 taken from a real 35,671-entry contest is simply
-unreachable on an unconfirmed slate — the ownership model's reachable range
-there is 69.1 to 82.6, and `calibrate_to_field_strength` correctly warns and
-clamps. That warning is not evidence of a broken ownership model. It is a
-units mismatch, and the pipeline now says so before calibrating.
+Two explanations were offered for this and both were wrong. They are
+recorded because each is superficially reasonable and the second is the
+kind of mistake that survives a long time.
 
-Measured against that same real contest, the generated field sits 16 to 23
-points low at every quantile from the median out to the 99.9th, with roughly
-the right spread (sd 27.1 against 30.6). A near-constant offset with correct
-shape is the signature of a level problem, not a structural one, and it
-lines up with the separately observed ~16% projection shortfall. Until that
-is resolved, absolute ROI is not a number to act on; the ranking between
-candidate lineups is.
+**Wrong answer one: a units mismatch from start probability.** The theory
+was that a settled contest's average is built from posted batting orders
+while an early run discounts every hitter by his chance of not starting, so
+the two scales cannot meet. The discount is real and large — 7.18 projected
+points per starter against 6.17 — but it is not this. Rerun on the same
+slate with lineups posted and 14 of 16 teams confirmed, the reachable range
+moved from 69.1–82.6 to 66.0–82.0. Essentially unchanged.
+
+**Wrong answer two: the field generator builds weaker lineups than real
+opponents.** Superficially compelling: the optimized candidates project 98
+to 102, straddling the real 98.8, while the sampled field projects 82, and
+real entrants do spend the cap and stack while an ownership sampler does
+not. But an identity rules it out. Ownership sums to the number of roster
+slots, so the mean score over *any* field whose marginals match the
+projection is exactly the ownership-weighted projection sum — joints cannot
+move a mean. How the generator assembles lineups is therefore incapable of
+producing this gap.
+
+That the optimized lineups land near 98.8 is not reassurance either. Those
+are the best 20 of 194 candidates; a field's *average* entry should score
+well below a tuned lineup, not level with it. It is another statement of
+the same anomaly.
+
+**What is actually left.** The identity applies to real ownership too, and
+that measurement exists: ownership read directly off the 193621106
+standings gives an implied field mean of 76.5 against a realized 98.8. With
+observed ownership and the identity holding exactly, only two possibilities
+remain — the projection level is roughly 20% low, or that slate scored
+about 20% above expectation.
+
+One slate cannot separate those, and this is the point at which to say
+plainly that the earlier claim of the shortfall being "seen twice,
+independently" was wrong: the backtest, the quantile comparison and the
+98.8 target are three views of the same contest, and a hot slate produces
+all three. Settling it needs contests from other slates, which is now the
+highest-value open item in the project. Until then absolute ROI is not a
+number to act on; the ranking between candidate lineups is.
 
 ### What is deliberately not measured
 
@@ -555,13 +582,13 @@ In rough order of expected value:
    them; `mlbdfs fit-ownership` re-fits.
 2. **Fit the Dirichlet concentration** from realized residuals rather than
    a prior, which needs several slates.
-3. **Check the projection level.** Now seen twice, independently: about 16%
-   below realized scoring for owned players on the one backtested slate, and
-   a 16-to-23-point shortfall at every quantile of the generated field
-   against a real contest's score distribution. Two noisy observations
-   agreeing is not proof, but it is enough to make this the most likely
-   single defect left in the projection layer. Resolving it is what would
-   make absolute ROI usable.
+3. **Settle the field-strength gap, which needs a second slate.** Real
+   ownership on contest 193621106 implies a field mean of 76.5 against a
+   realized 98.8. The identity behind that is exact, so it is either a ~20%
+   projection shortfall or a slate that ran ~20% hot. Every observation of
+   it so far comes from that one contest, so no amount of re-analysis
+   separates the two -- it takes standings from other slates. Resolving it
+   is what would make absolute ROI usable.
 3. **Backtest calibration.** `sim.engine.calibration_report` produces PIT
    values against realized scores; a flat histogram means the intervals are
    honest, U-shaped means too narrow. Worth running over a month of slates

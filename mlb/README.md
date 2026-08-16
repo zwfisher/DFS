@@ -16,7 +16,7 @@ pip install -e ".[data,dev]"
 
 mlbdfs demo                 # whole pipeline on synthetic data, no network
 mlbdfs diagnose             # check the simulator against league aggregates
-pytest                      # 92 tests, all offline
+pytest                      # 117 tests, all offline
 ```
 
 A real slate comes straight off DraftKings' API — no CSV export needed:
@@ -244,9 +244,7 @@ before the card is posted:
 That discount is not cosmetic. On a real 8-game slate it moves the mean
 projected starter from 7.18 points to 6.17 — and until recently
 `resolve_lineup` overwrote it with 1.0, so the whole model was inert on
-exactly the slates it exists for. Anything you compare a discounted
-projection against has to be discounted too; see the field-calibration note
-in `docs/DESIGN.md`.
+exactly the slates it exists for.
 
 At roughly 13 points per zero, rostering eight hitters at 0.90 costs about
 half a zero per lineup against waiting for confirmation. That is real but
@@ -348,10 +346,14 @@ ROI numbers themselves.
 
 Measured against a real 35,671-entry contest, the generated field comes in
 16 to 23 points low at every quantile from the median out to the 99.9th,
-with roughly the right spread. Some of that is a scale mismatch — the real
-contest locked with posted lineups while an early run discounts every hitter
-by his chance of not starting — and some of it is the projection shortfall
-in the next section. Either way, the ROI *level* is not a number to act on.
+with roughly the right spread. Two tempting explanations for that are both
+wrong, and `docs/DESIGN.md` records why: it is not the start-probability
+discount (the gap survives a fully posted slate), and it is not the field
+generator (ownership sums to the roster slots, so joints cannot move a
+mean). What is left is either a ~20% projection shortfall or a slate that
+ran ~20% hot, and every observation of it so far comes from the same
+contest. Until standings from other slates settle it, the ROI *level* is
+not a number to act on.
 
 **Ownership is now fitted, on one slate.** The weights come from maximum
 likelihood against a real 35,671-entry contest rather than from guesses, and
@@ -419,7 +421,7 @@ mlbdfs/
   ownership/         conditional logit, Dirichlet draws, field, logger
   optimize/          CP-SAT lineups, contest payouts, ROI and portfolio
 tools/diagnose_sim.py   simulator realism battery
-tests/                  92 offline tests
+tests/                  117 offline tests
 ```
 
 ## Docs

@@ -358,6 +358,81 @@ def probable_starters(draftables: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def fetch_contest(contest_id: int, ttl_hours: float = 1.0) -> Contest:
+    """One contest, built from its own detail endpoint rather than the lobby.
+
+    The lobby lists what you can still *join*, so a contest that has filled
+    -- which the interesting ones do, well before lock -- drops out of it
+    while remaining perfectly real. Looking a contest up by id through the
+    lobby therefore fails exactly when you are closest to entering it. This
+    endpoint answers for any id and carries better data besides: entry fee,
+    field size, entries so far, max per user and the payout bands, all
+    structured.
+    """
+    payload = _contest_detail(contest_id, ttl_hours)
+    bands = _payout_bands(payload)
+    if not bands:
+        raise ValueError(f"contest {contest_id} publishes no cash payouts")
+    return Contest(
+        name=str(payload.get("name") or contest_id),
+        entry_fee=float(payload.get("entryFee") or 0.0),
+        n_entries=int(payload.get("maximumEntries") or payload.get("entries") or 0),
+        payouts=bands,
+        max_entries_per_user=int(payload.get("maximumEntriesPerUser") or 1),
+    )
+
+
+def contest_detail(contest_id: int, ttl_hours: float = 1.0) -> dict:
+    """Raw contest metadata: fill, guarantee, draft group, start time."""
+    return _contest_detail(contest_id, ttl_hours)
+
+
+def _contest_detail(contest_id: int, ttl_hours: float) -> dict:
+    def fetch() -> pd.DataFrame:
+        payload = _get_json(CONTEST_URL.format(contest_id=contest_id))
+        detail = payload.get("contestDetail") or {}
+        # Stored as a one-row frame so it rides the same parquet cache as
+        # everything else; the nested payout list is kept as JSON text.
+        flat = {
+            k: v for k, v in detail.items()
+            if isinstance(v, (str, int, float, bool)) or v is None
+        }
+        flat["payoutSummary"] = json.dumps(detail.get("payoutSummary") or [])
+        return pd.DataFrame([flat])
+
+    frame = cached_frame(
+        "dk_contest",
+        fetch,
+        ttl=timedelta(hours=ttl_hours),
+        contest_id=int(contest_id),
+    )
+    if frame.empty:
+        raise ValueError(f"contest {contest_id} returned no detail")
+    row = frame.iloc[0].to_dict()
+    row["payoutSummary"] = json.loads(row.get("payoutSummary") or "[]")
+    return row
+
+
+def _payout_bands(payload: dict) -> list[tuple[int, int, float]]:
+    """Cash bands from a contest detail payload, ticket prizes dropped."""
+    bands = []
+    for band in payload.get("payoutSummary") or []:
+        value = 0.0
+        for desc in band.get("payoutDescriptions") or []:
+            if desc.get("payoutDescriptionType") == "Text":
+                value = float(desc.get("value") or 0.0)
+                break
+        else:
+            cash = (band.get("tierPayoutDescriptions") or {}).get("Cash")
+            if cash:
+                value = float(str(cash).replace("$", "").replace(",", ""))
+        if value > 0:
+            bands.append(
+                (int(band["minPosition"]), int(band["maxPosition"]), value)
+            )
+    return bands
+
+
 def to_contest(row: pd.Series, payouts: pd.DataFrame) -> Contest:
     """Build the optimizer's :class:`Contest` from a lobby row and its bands."""
     bands = [

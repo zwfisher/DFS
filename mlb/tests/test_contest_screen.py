@@ -319,3 +319,53 @@ def test_sharing_a_field_standing_changes_nothing():
         *args, contest, standing=field_standing(*args)
     )
     pd.testing.assert_frame_equal(fresh, shared)
+
+
+CONTEST_DETAIL = {
+    "contestDetail": {
+        "name": "MLB $15K mini-MAX [150 Entry Max]",
+        "entryFee": 0.5,
+        "entries": 35671,
+        "maximumEntries": 35671,
+        "maximumEntriesPerUser": 150,
+        "totalPayouts": 15000.0,
+        "isGuaranteed": True,
+        "draftGroupId": 152178,
+        "payoutSummary": [
+            {"minPosition": 1, "maxPosition": 1,
+             "tierPayoutDescriptions": {"Cash": "$1,500.00"},
+             "payoutDescriptions": [{"payoutDescriptionType": "Text",
+                                     "value": 1500.0}]},
+            {"minPosition": 2, "maxPosition": 8185,
+             "tierPayoutDescriptions": {"Cash": "$1.65"},
+             "payoutDescriptions": [{"payoutDescriptionType": "Text",
+                                     "value": 1.65}]},
+            {"minPosition": 8186, "maxPosition": 8186,
+             "tierPayoutDescriptions": {"Ticket": "Some ticket"}},
+        ],
+    }
+}
+
+
+def test_contest_detail_payouts_drop_ticket_only_bands():
+    bands = lobby._payout_bands(CONTEST_DETAIL["contestDetail"])
+    assert [b[:2] for b in bands] == [(1, 1), (2, 8185)]
+    assert bands[0][2] == 1500.0
+
+
+def test_fetch_contest_reads_the_detail_endpoint_not_the_lobby(monkeypatch):
+    """A filled contest leaves the lobby but is still perfectly enterable.
+
+    Resolving by id through the lobby failed exactly when it mattered --
+    an hour before lock, with the contest full.
+    """
+    monkeypatch.setattr(lobby, "_get_json", lambda url, timeout=60.0: CONTEST_DETAIL)
+    monkeypatch.setattr(
+        lobby, "cached_frame", lambda name, fetch, **kw: fetch()
+    )
+    contest = lobby.fetch_contest(193832694)
+
+    assert contest.entry_fee == 0.5
+    assert contest.n_entries == 35671
+    assert contest.max_entries_per_user == 150
+    assert contest.rake == pytest.approx(0.159, abs=0.002)
