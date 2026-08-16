@@ -487,6 +487,9 @@ def cmd_contests(args) -> int:
     ]
     if args.max_entries_per_user:
         keep = keep[keep["max_entries_per_user"] <= args.max_entries_per_user]
+    if keep.empty:
+        print(f"\nno contests match the filters (of {len(contests)} on this slate)")
+        return 0
 
     payouts = {}
     for contest_id in keep["contest_id"]:
@@ -495,7 +498,15 @@ def cmd_contests(args) -> int:
         except Exception as exc:  # one bad contest should not sink the screen
             print(f"payouts unavailable for {contest_id}: {exc}")
 
-    scored = sc.screen(keep, payouts).sort_values("breakeven_rank", ascending=False)
+    scored = sc.screen(keep, payouts)
+    # Payout curves are not published for every contest, and are missing
+    # wholesale for slates more than a day out -- fall back to ranking on
+    # rake, which is always computable from the lobby alone.
+    if "breakeven_rank" in scored:
+        scored = scored.sort_values("breakeven_rank", ascending=False)
+    else:
+        print("no published payout curves yet; ranking on rake alone")
+        scored = scored.sort_values("rake")
     cols = [
         "contest_id", "name", "entry_fee", "max_entries", "max_entries_per_user",
         "rake", "fill", "overlay_now", "pay_rate", "top_share", "min_cash_multiple",
