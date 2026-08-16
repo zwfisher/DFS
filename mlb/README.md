@@ -16,7 +16,7 @@ pip install -e ".[data,dev]"
 
 mlbdfs demo                 # whole pipeline on synthetic data, no network
 mlbdfs diagnose             # check the simulator against league aggregates
-pytest                      # 117 tests, all offline
+pytest                      # 120 tests, all offline
 ```
 
 A real slate comes straight off DraftKings' API — no CSV export needed:
@@ -36,6 +36,14 @@ payout shape with the contest's *published* payout table, which is what makes
 the ROI numbers mean anything. A salary CSV still works via `--slate`, but it
 carries none of that, and in particular it does not carry injury status —
 the export lists the whole 40-man and an IL bat is a guaranteed zero.
+
+With `--draft-group`, `--out` writes two files: `lineups.csv` for reading,
+and `lineups_dk.csv` for uploading. They are not interchangeable. The
+DraftKings bulk-entry form wants roster-slot columns
+(`P,P,C,1B,2B,3B,SS,OF,OF,OF`) holding **draftable ids**, and a
+multi-position player has a *different* draftable id at each slot he is
+eligible for. A file built from player ids looks right and imports as
+nothing.
 
 **Run it after batting orders post**, usually one to three hours before
 first pitch. `optimize` refuses a slate whose lineups are mostly unposted
@@ -421,7 +429,7 @@ mlbdfs/
   ownership/         conditional logit, Dirichlet draws, field, logger
   optimize/          CP-SAT lineups, contest payouts, ROI and portfolio
 tools/diagnose_sim.py   simulator realism battery
-tests/                  117 offline tests
+tests/                  120 offline tests
 ```
 
 ## Docs

@@ -453,6 +453,25 @@ def _report(result, args) -> None:
         pd.DataFrame(rows).to_csv(args.out, index=False)
         print(f"\nwrote {args.out}")
 
+        # And a file DraftKings will actually accept, which is a different
+        # thing: roster-slot columns and draftable ids, not player ids.
+        draft_group = getattr(args, "draft_group", None)
+        if draft_group:
+            from .data.upload import write_upload_csv
+
+            target = Path(args.out).with_name(Path(args.out).stem + "_dk.csv")
+            try:
+                n = write_upload_csv(
+                    target,
+                    [result.pool[int(r.lineup) - 1].player_ids
+                     for r in result.selected.itertuples()],
+                    result.slate,
+                    draft_group,
+                )
+                print(f"wrote {target} ({n} lineups, DraftKings upload format)")
+            except Exception as exc:
+                print(f"could not write the DraftKings upload file: {exc}")
+
 
 def cmd_contests(args) -> int:
     from .data import lobby as dk_lobby

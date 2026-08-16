@@ -356,3 +356,67 @@ def test_deterministic_mode_reproduces_the_candidate_pool():
         return [tuple(sorted(lu.player_ids)) for lu in built]
 
     assert pool() == pool()
+
+
+def test_assign_slots_does_not_strand_a_position():
+    """A greedy pass fails here; the matching must back out and retry.
+
+    The 1B/OF is the only player who can fill first base, but if he is
+    placed in an outfield slot first the lineup has no first baseman -- and
+    a lineup that "almost" assigns is a file DraftKings rejects.
+    """
+    from mlbdfs.data.upload import assign_slots
+
+    positions = {
+        "p1": ("P",), "p2": ("P",), "c": ("C",),
+        "flex": ("1B", "OF"),
+        "second": ("2B",), "third": ("3B",), "short": ("SS",),
+        "of1": ("OF",), "of2": ("OF",), "of3": ("OF",),
+    }
+    got = assign_slots(positions)
+    assert got is not None
+    assert got["flex"] == "1B"
+    assert sorted(got.values()) == sorted(
+        ["P", "P", "C", "1B", "2B", "3B", "SS", "OF", "OF", "OF"]
+    )
+
+
+def test_assign_slots_returns_none_when_no_assignment_exists():
+    from mlbdfs.data.upload import assign_slots
+
+    positions = {f"of{i}": ("OF",) for i in range(10)}
+    assert assign_slots(positions) is None
+
+
+def test_upload_frame_uses_the_per_slot_draftable_id():
+    """A multi-position player has a different id at each slot.
+
+    Exporting one id for both is the failure this test exists to catch:
+    the file looks correct and imports as nothing.
+    """
+    from types import SimpleNamespace
+
+    from mlbdfs.data.upload import UPLOAD_COLUMNS, upload_frame
+
+    names = ["p1", "p2", "c", "flex", "second", "third", "short",
+             "of1", "of2", "of3"]
+    positions = {
+        "p1": ("P",), "p2": ("P",), "c": ("C",), "flex": ("1B", "OF"),
+        "second": ("2B",), "third": ("3B",), "short": ("SS",),
+        "of1": ("OF",), "of2": ("OF",), "of3": ("OF",),
+    }
+
+    class FakeSlate:
+        def player(self, pid):
+            return SimpleNamespace(positions=positions[pid], name=pid)
+
+    slot_ids = {(p, s): hash((p, s)) % 100000 for p in names
+                for s in positions[p]}
+    slot_ids[("flex", "1B")] = 111
+    slot_ids[("flex", "OF")] = 222
+
+    frame = upload_frame([names], FakeSlate(), slot_ids)
+    assert list(frame.columns) == UPLOAD_COLUMNS
+    # flex is needed at first base, so its 1B id must be the one written.
+    assert frame.iloc[0]["1B"] == 111
+    assert 222 not in list(frame.iloc[0])
