@@ -420,3 +420,65 @@ def test_upload_frame_uses_the_per_slot_draftable_id():
     # flex is needed at first base, so its 1B id must be the one written.
     assert frame.iloc[0]["1B"] == 111
     assert 222 not in list(frame.iloc[0])
+
+
+def _standing(beaten, field_size):
+    from mlbdfs.optimize.portfolio import FieldStanding
+
+    arr = np.asarray(beaten, dtype=np.int32).reshape(-1, 1)
+    return FieldStanding(beaten=arr, scores=arr.astype(float),
+                         field_size=field_size)
+
+
+def test_contest_rank_can_produce_second_and_third():
+    """The bug: scaling up by ~3 made ranks 2 and 3 unreachable.
+
+    A 12,000-lineup field standing in for 35,671 entries multiplies by 2.97,
+    so rounding sent every unbeaten lineup to rank 1 and paid it first
+    prize. Measured on a real slate that doubled P(win) and inflated ROI by
+    32%.
+    """
+    from mlbdfs.optimize.contest import Contest
+    from mlbdfs.optimize.portfolio import contest_rank
+
+    contest = Contest("c", 1.0, 35_671, [(1, 1, 1500.0)])
+    standing = _standing([0] * 20_000, 12_000)
+    rank = contest_rank(standing, contest, seed=1)
+
+    assert (rank == 1).mean() < 0.9, "unbeaten must not always mean first"
+    assert ((rank >= 2) & (rank <= 3)).mean() > 0.01
+
+
+def test_contest_rank_is_exact_when_the_field_is_big_enough():
+    """Nothing to extrapolate, so no sampling noise should be introduced."""
+    from mlbdfs.optimize.contest import Contest
+    from mlbdfs.optimize.portfolio import contest_rank
+
+    contest = Contest("c", 1.0, 1_000, [(1, 100, 5.0)])
+    standing = _standing([0, 1, 2, 49, 999], 1_000)
+    rank = contest_rank(standing, contest, seed=1)
+    assert rank.ravel().tolist() == [1, 2, 3, 50, 1000]
+
+
+def test_contest_rank_tracks_how_many_beat_you():
+    from mlbdfs.optimize.contest import Contest
+    from mlbdfs.optimize.portfolio import contest_rank
+
+    contest = Contest("c", 1.0, 50_000, [(1, 1, 100.0)])
+    ranks = []
+    for beaten in (0, 10, 100, 1000):
+        standing = _standing([beaten] * 4000, 10_000)
+        ranks.append(contest_rank(standing, contest, seed=2).mean())
+    assert ranks == sorted(ranks)
+    # Ten of ten thousand beaten is one in a thousand, so about 50 of 50,000.
+    assert 30 < ranks[1] < 80
+
+
+def test_contest_rank_never_leaves_the_field():
+    from mlbdfs.optimize.contest import Contest
+    from mlbdfs.optimize.portfolio import contest_rank
+
+    contest = Contest("c", 1.0, 500, [(1, 50, 5.0)])
+    standing = _standing([0, 9_999, 5_000], 10_000)
+    rank = contest_rank(standing, contest, seed=3)
+    assert rank.min() >= 1 and rank.max() <= 500

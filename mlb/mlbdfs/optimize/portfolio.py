@@ -101,6 +101,51 @@ def field_standing(
     return FieldStanding(beaten=beaten, scores=totals, field_size=field.size)
 
 
+def contest_rank(
+    standing: FieldStanding, contest: Contest, seed: int = 0
+) -> np.ndarray:
+    """Finishing rank in the real contest, from a smaller sampled field.
+
+    The obvious approach -- multiply the count of field lineups beating you
+    by ``n_entries / field_size`` and round -- is wrong in a way that
+    silently inflates every ROI in the project. With a 12,000-lineup field
+    standing in for a 35,671-entry contest the multiplier is 2.97, so zero
+    beaten maps to rank 1 and one beaten maps to rank 4: **ranks 2 and 3
+    cannot be produced at all.** Every lineup good enough to beat the whole
+    sample collects first prize, including the ones that would really have
+    come second. Measured on one slate that doubled P(win) and inflated ROI
+    by 32%.
+
+    The sampled field is a *sample*, so the honest object is a distribution
+    over true rank, not a point. If ``k`` of ``n`` sampled lineups beat a
+    candidate, the share of the real field that beats it has a Beta
+    posterior, and the count among ``N`` entries is Binomial given that
+    share -- a Beta-Binomial draw. This gets the small-``k`` behaviour
+    right, which is the only region that matters: at ``k = 0`` the posterior
+    still carries real mass, so the candidate lands on rank 1, 2, 3 or worse
+    with sensible probabilities instead of always winning.
+
+    Jeffreys' ``Beta(k + 1/2, n - k + 1/2)`` is the prior, chosen because it
+    is the one that does not collapse at ``k = 0``. When the field is at
+    least as large as the contest there is nothing to extrapolate and the
+    exact scaled rank is used.
+    """
+    beaten = standing.beaten
+    n_field = standing.field_size
+    n_entries = contest.n_entries
+
+    if n_field >= n_entries:
+        scale = n_entries / n_field
+        return np.clip(
+            np.rint(1.0 + beaten * scale).astype(np.int64), 1, n_entries
+        )
+
+    rng = np.random.default_rng(seed)
+    share = rng.beta(beaten + 0.5, n_field - beaten + 0.5)
+    ahead = rng.binomial(n_entries, np.clip(share, 0.0, 1.0))
+    return np.clip(ahead + 1, 1, n_entries).astype(np.int64)
+
+
 def evaluate_lineups(
     lineups: list[Lineup],
     scores: np.ndarray,
@@ -109,6 +154,7 @@ def evaluate_lineups(
     contest: Contest,
     chunk_size: int = 2000,
     standing: FieldStanding | None = None,
+    seed: int = 0,
 ) -> pd.DataFrame:
     """Expected ROI and finishing distribution for each candidate lineup."""
     if standing is None:
@@ -119,11 +165,7 @@ def evaluate_lineups(
     n_sims = standing.scores.shape[0]
     n_cand = len(lineups)
     payout = contest.payout_table()
-    scale = contest.n_entries / standing.field_size
-
-    rank = np.clip(
-        np.rint(1.0 + standing.beaten * scale).astype(np.int64), 1, contest.n_entries
-    )
+    rank = contest_rank(standing, contest, seed=seed)
     total_prize = payout[rank].sum(axis=0)
     total_score = standing.scores.sum(axis=0)
     wins = (rank == 1).sum(axis=0)

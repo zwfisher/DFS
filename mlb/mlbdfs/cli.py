@@ -94,11 +94,35 @@ def _load_real_slate(args) -> tuple:
     posted = 0 if dk_lineups is None else len(dk_lineups)
     print(f"{posted} hitters with a posted batting order")
 
+    # Vegas implied team totals, in order of preference: a file you passed,
+    # then The Odds API if a key is configured, then nothing. The third case
+    # is not neutral -- it gives every team the league-average run
+    # environment, which is the single largest piece of public information
+    # the projection can be missing, so it says so loudly.
     totals = {}
     if args.totals:
         totals = pd.read_csv(args.totals).set_index("team")["total"].to_dict()
-    else:
-        print("no Vegas totals supplied; using league average for every team")
+        print(f"Vegas totals for {len(totals)} teams from {args.totals}")
+    elif not getattr(args, "no_odds", False):
+        from .data import odds as odds_api
+
+        try:
+            frame = odds_api.fetch_team_totals(game_date)
+            totals = odds_api.totals_map(frame)
+            if totals:
+                sources_used = "/".join(sorted(frame["source"].unique()))
+                print(f"Vegas totals for {len(totals)} teams from The Odds API "
+                      f"({sources_used}), {frame['total'].min():.1f} to "
+                      f"{frame['total'].max():.1f} runs")
+        except odds_api.MissingOddsKey:
+            pass
+        except Exception as exc:
+            print(f"odds lookup failed ({exc})")
+
+    if not totals:
+        print("WARNING: no Vegas totals; every team gets the league-average run "
+              "environment. Set ODDS_API_KEY or pass --totals; this is the "
+              "biggest public signal the projections can be missing.")
 
     slate = build_slate(
         salaries,
@@ -598,6 +622,10 @@ def build_parser() -> argparse.ArgumentParser:
             )
             p.add_argument("--date", help="slate date, YYYY-MM-DD (default today)")
             p.add_argument("--totals", help="CSV of team,total Vegas implied runs")
+            p.add_argument(
+                "--no-odds", action="store_true", dest="no_odds",
+                help="skip The Odds API even if ODDS_API_KEY is set",
+            )
             p.add_argument(
                 "--no-projected-lineups",
                 action="store_true",
