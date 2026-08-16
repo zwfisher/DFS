@@ -142,11 +142,23 @@ def resolve_lineup(slate: Slate, team: str, fill_missing: bool = True) -> list[P
 
 
 def confirmed_share(slate: Slate) -> float:
-    """Fraction of the slate's hitters that have a posted batting order."""
+    """Fraction of the slate's *startable* hitters with a posted order.
+
+    The denominator is nine per team, not every hitter DraftKings lists.
+    That distinction is the whole correctness of this function: a real
+    eight-game slate carries about 280 draftable hitters and only 144 of
+    them can ever start, so dividing by the full roster caps the result near
+    51% and makes any threshold above that unreachable. The
+    ``MIN_CONFIRMED_LINEUP_SHARE`` gate was therefore firing on fully posted
+    slates and demanding an override that should only be needed early.
+    """
     hitters = [p for p in slate.players if not p.is_pitcher]
     if not hitters:
         return 1.0
-    return sum(1 for p in hitters if p.confirmed) / len(hitters)
+    startable = 9 * len({p.team for p in hitters})
+    if startable == 0:
+        return 1.0
+    return min(1.0, sum(1 for p in hitters if p.confirmed) / startable)
 
 
 def order_weights(lineup: list[Player], implied_runs: float) -> np.ndarray:

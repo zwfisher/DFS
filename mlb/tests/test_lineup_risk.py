@@ -186,3 +186,57 @@ def test_resolve_lineup_still_trusts_a_posted_order():
         player.start_probability = 0.5
 
     assert all(p.start_probability == 1.0 for p in resolve_lineup(slate, team))
+
+
+def test_confirmed_share_is_measured_against_startable_hitters():
+    """Nine per team, not every bench bat DraftKings lists.
+
+    A real slate carries roughly 280 draftable hitters and at most 144
+    starters, so dividing by the full roster caps the share near 51% and
+    makes the MIN_CONFIRMED_LINEUP_SHARE gate unreachable -- it fired on
+    fully posted slates and demanded an override that only belongs early.
+    """
+    from mlbdfs.projections.lineups import confirmed_share
+
+    slate, _ = make_slate(n_games=4, seed=6)
+    hitters = [p for p in slate.players if not p.is_pitcher]
+    teams = {p.team for p in hitters}
+
+    for p in hitters:
+        p.confirmed = False
+    assert confirmed_share(slate) == 0.0
+
+    for team in teams:
+        for p in slate.lineup_for(team):
+            p.confirmed = True
+    assert confirmed_share(slate) == pytest.approx(1.0)
+
+    # And a bench must not dilute it. The synthetic slate carries exactly
+    # nine hitters a team; a real DraftKings slate lists the whole roster,
+    # which is what broke the old denominator.
+    import dataclasses
+
+    for team in teams:
+        for i in range(6):
+            bench = dataclasses.replace(
+                slate.lineup_for(team)[0],
+                player_id=f"{team}_BENCH{i}",
+                dk_id=f"{team}_BENCH{i}",
+                batting_order=None,
+                confirmed=False,
+            )
+            slate.players.append(bench)
+    assert confirmed_share(slate) == pytest.approx(1.0)
+
+
+def test_confirmed_share_tracks_teams_posted():
+    from mlbdfs.projections.lineups import confirmed_share
+
+    slate, _ = make_slate(n_games=4, seed=6)
+    teams = sorted({p.team for p in slate.players if not p.is_pitcher})
+    for p in slate.players:
+        p.confirmed = False
+
+    for p in slate.lineup_for(teams[0]):
+        p.confirmed = True
+    assert confirmed_share(slate) == pytest.approx(1.0 / len(teams), abs=0.01)

@@ -29,6 +29,34 @@ from .cache import cached_frame
 
 log = logging.getLogger(__name__)
 
+
+def _get_json(url: str, timeout: float = 30.0, attempts: int = 3) -> dict | None:
+    """A JSON GET that tolerates one bad response, returning None if not.
+
+    The Stats API occasionally answers a burst of requests with something
+    that is not JSON. Left unhandled that raised out of the middle of a
+    fifteen-game loop and lost every lineup on the slate -- which happened
+    live, an hour and fifty minutes before lock, and is the worst possible
+    time for a transient error to be fatal. A skipped game is a bad outcome;
+    a skipped slate is a much worse one, so the caller gets None and decides.
+    """
+    import time
+
+    import requests
+
+    for attempt in range(attempts):
+        try:
+            response = requests.get(url, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            if attempt == attempts - 1:
+                log.warning("giving up on %s after %d attempts: %s",
+                            url, attempts, exc)
+                return None
+            time.sleep(0.5 * 2**attempt)
+    return None
+
 # Statcast event codes mapped onto our outcome space. Anything not listed
 # resolves to a ball in play out, which is the right default: the events
 # left over are fielder's choices, sacrifices and the various out types.
@@ -208,22 +236,26 @@ def confirmed_lineups(game_date: date, force: bool = False) -> pd.DataFrame:
     """
 
     def fetch() -> pd.DataFrame:
-        import requests
-
         sched = (
             "https://statsapi.mlb.com/api/v1/schedule"
             f"?sportId=1&date={game_date.isoformat()}"
         )
-        games = requests.get(sched, timeout=30).json()
+        games = _get_json(sched)
+        if games is None:
+            raise RuntimeError(f"could not fetch the schedule for {game_date}")
         game_pks = [
             g["gamePk"] for d in games.get("dates", []) for g in d.get("games", [])
         ]
 
         rows = []
+        skipped = []
         for pk in game_pks:
-            box = requests.get(
-                f"https://statsapi.mlb.com/api/v1/game/{pk}/boxscore", timeout=30
-            ).json()
+            box = _get_json(
+                f"https://statsapi.mlb.com/api/v1/game/{pk}/boxscore"
+            )
+            if box is None:
+                skipped.append(pk)
+                continue
             for side in ("away", "home"):
                 team_box = box.get("teams", {}).get(side, {})
                 abbr = team_box.get("team", {}).get("abbreviation")
@@ -238,6 +270,13 @@ def confirmed_lineups(game_date: date, force: bool = False) -> pd.DataFrame:
                             "batting_order": order,
                         }
                     )
+        if skipped:
+            # Loud, because a short pull is indistinguishable from unposted
+            # lineups and quietly costs you the batting order for a game.
+            log.warning(
+                "no boxscore for %d of %d games (%s); those lineups will look "
+                "unposted", len(skipped), len(game_pks), skipped
+            )
         return pd.DataFrame(rows)
 
     return cached_frame(
