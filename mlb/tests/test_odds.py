@@ -120,3 +120,41 @@ def test_totals_map_is_the_shape_build_slate_wants():
     assert set(mapping) == {"TOR", "NYY"}
     assert all(isinstance(v, float) for v in mapping.values())
     assert odds.totals_map(pd.DataFrame()) == {}
+
+
+def test_a_night_game_belongs_to_the_eastern_day_it_is_played_on():
+    """A 20:05 ET first pitch is stamped 00:05Z the next day.
+
+    Comparing the UTC date prefix to the slate date silently drops those
+    games, and their teams then get the league-average run environment with
+    no warning. Measured on draft group 152195 it cost 2 of 7 games.
+    """
+    from datetime import date
+
+    assert odds.eastern_date("2026-08-18T00:06:00Z") == date(2026, 8, 17)
+    assert odds.eastern_date("2026-08-18T00:41:00Z") == date(2026, 8, 17)
+    # An afternoon game stays on its own UTC day.
+    assert odds.eastern_date("2026-08-17T17:37:00Z") == date(2026, 8, 17)
+    # And the small hours really are the next day.
+    assert odds.eastern_date("2026-08-18T13:05:00Z") == date(2026, 8, 18)
+
+
+def test_eastern_date_tolerates_junk():
+    assert odds.eastern_date("") is None
+    assert odds.eastern_date("not a timestamp") is None
+
+
+def test_the_requested_window_covers_the_whole_eastern_day():
+    """The window must reach past midnight UTC or it reintroduces the bug."""
+    from datetime import date, datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    start = datetime.combine(date(2026, 8, 17), datetime.min.time(),
+                             tzinfo=odds.EASTERN)
+    assert odds._utc_stamp(start) == "2026-08-17T04:00:00Z"
+    assert odds._utc_stamp(start + timedelta(days=1)) == "2026-08-18T04:00:00Z"
+    # Every game on the 17th ET falls inside it.
+    for stamp in ("2026-08-17T22:40:00Z", "2026-08-18T00:41:00Z"):
+        moment = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        assert start <= moment < start + timedelta(days=1)
+        assert odds.eastern_date(stamp) == date(2026, 8, 17)

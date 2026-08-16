@@ -12,6 +12,14 @@ Two paths to a team total, in order of preference:
 
 1. **The ``team_totals`` market**, when the account's plan exposes it for an
    event. This is the real thing -- a bookmaker's own number, no inference.
+
+   ``implied_team_totals`` reads this market, but nothing currently feeds it
+   one: The Odds API serves ``team_totals`` only from the per-event endpoint
+   (``EVENT_ODDS_URL``), and ``fetch_team_totals`` calls the bulk
+   ``/odds`` endpoint, which silently ignores the market. So in practice
+   every run takes path 2. The market *is* available on this key -- it is
+   what ``FAVOURITE_RUN_SHARE`` was calibrated against -- at a cost of one
+   request per event rather than one per slate.
 2. **Derived from the game total and the moneyline.** Every plan has these.
    The game total says how many runs the two teams combine for and the
    moneyline says who is better; splitting the first by the second gives a
@@ -24,13 +32,24 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from .cache import cached_frame
 
 log = logging.getLogger(__name__)
+
+# A slate date is an Eastern-time calendar date -- that is what DraftKings
+# means by it and what the user types. The Odds API stamps `commence_time` in
+# UTC, where a night game rolls over to the next day: a 20:05 ET first pitch
+# is 00:05Z tomorrow. Comparing the UTC prefix to the slate date therefore
+# drops every game starting at or after 8pm ET, which is most of a west-coast
+# slate and, measured on draft group 152195, 2 of 7 games on an ordinary
+# evening one. Nothing looks wrong when it happens -- those teams just quietly
+# fall back to the league-average run environment.
+EASTERN = ZoneInfo("America/New_York")
 
 ODDS_URL = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
 EVENT_ODDS_URL = (
@@ -39,12 +58,29 @@ EVENT_ODDS_URL = (
 
 # How much of a game's total the favourite is expected to score, per unit of
 # win probability above even. A coin-flip game splits 50/50; at a 65% favourite
-# this puts roughly 53.5% of the total on the favourite, which is about a
-# 0.6-run edge on a 9-run total and matches the run lines MLB books post.
+# this puts roughly 53.5% of the total on the favourite.
 #
 # It is a linear approximation to something that is not linear, and it is the
 # weakest link in this module. When `team_totals` is available it is not used
 # at all.
+#
+# **Measured against real published team totals, this is about half of what
+# the market prices, and it has not been changed yet.** On 14 games of
+# 2026-08-16 with two-sided `team_totals` quotes, inverting the de-vigged
+# over/under at each posted line for the mean that implies it (negative
+# binomial, var/mean 1.5) and regressing the recovered run share on the
+# de-vigged win probability gives 0.488, with a correlation of 0.992 and a
+# share MAE of 0.008 against 0.024 here. The estimate is insensitive to the
+# dispersion assumption -- Poisson gives 0.508, var/mean 2.0 gives 0.471 --
+# so the range is 0.47 to 0.51, not 0.235.
+#
+# The practical effect is that the run gap between favourite and underdog
+# comes out roughly half its market value, worst on the lopsided games where
+# it matters most: CWS at DET priced a 2.35-run gap against 1.27 here, BOS at
+# PIT 1.64 against 0.79. Raising it is a change to every projection on every
+# slate, so it wants its own measurement on more than one day's card before
+# it lands -- and if the `team_totals` path below were reachable through the
+# bulk endpoint the constant would matter far less. See docs/DESIGN.md.
 FAVOURITE_RUN_SHARE = 0.235
 
 # The Odds API names teams in full ("Arizona Diamondbacks"); DraftKings uses
@@ -66,6 +102,25 @@ TEAM_CODES = {
     "Tampa Bay Rays": "TB", "Texas Rangers": "TEX",
     "Toronto Blue Jays": "TOR", "Washington Nationals": "WSH",
 }
+
+
+def eastern_date(commence_time: str) -> date | None:
+    """The slate date an event belongs to, from its ISO UTC start time."""
+    if not commence_time:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(commence_time).replace("Z", "+00:00"))
+    except ValueError:
+        log.warning("unparseable commence_time %r", commence_time)
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=ZoneInfo("UTC"))
+    return stamp.astimezone(EASTERN).date()
+
+
+def _utc_stamp(moment: datetime) -> str:
+    """The API wants ``YYYY-MM-DDTHH:MM:SSZ``, unpunctuated by offsets."""
+    return moment.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class MissingOddsKey(RuntimeError):
@@ -194,17 +249,24 @@ def fetch_team_totals(
     def fetch() -> pd.DataFrame:
         import requests
 
-        response = requests.get(
-            ODDS_URL,
-            params={
-                "apiKey": _api_key(),
-                "regions": "us",
-                "markets": markets,
-                "oddsFormat": "american",
-                "dateFormat": "iso",
-            },
-            timeout=30,
-        )
+        params = {
+            "apiKey": _api_key(),
+            "regions": "us",
+            "markets": markets,
+            "oddsFormat": "american",
+            "dateFormat": "iso",
+        }
+        if game_date is not None:
+            # Ask for the Eastern day explicitly rather than trusting the
+            # endpoint's default "upcoming" window, which is capped and would
+            # truncate a late slate without saying so.
+            start = datetime.combine(
+                game_date, datetime.min.time(), tzinfo=EASTERN
+            )
+            params["commenceTimeFrom"] = _utc_stamp(start)
+            params["commenceTimeTo"] = _utc_stamp(start + timedelta(days=1))
+
+        response = requests.get(ODDS_URL, params=params, timeout=30)
         response.raise_for_status()
         remaining = response.headers.get("x-requests-remaining")
         if remaining is not None:
@@ -213,7 +275,7 @@ def fetch_team_totals(
         if game_date is not None:
             events = [
                 e for e in events
-                if str(e.get("commence_time", ""))[:10] == game_date.isoformat()
+                if eastern_date(e.get("commence_time", "")) == game_date
             ]
         return implied_team_totals(events)
 

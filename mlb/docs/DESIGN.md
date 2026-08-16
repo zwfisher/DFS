@@ -249,6 +249,19 @@ equally-good lineups; `max_deterministic_time` does not fix it and only
 stays fast — a different draw from a sampled pool is not a worse one — but
 it is now a named option rather than a surprise.
 
+**Vegas totals filtered on the wrong calendar.** A slate date is an Eastern
+date; The Odds API stamps `commence_time` in UTC, where a night game rolls
+over. Comparing the UTC prefix to the slate date therefore dropped every game
+starting at or after 8pm ET. On draft group 152195 that was 2 of 7 games — the
+Cubs/White Sox at 20:06 ET and, more expensively, Dodgers at Coors at 20:41 —
+so four teams silently took the league-average run environment on the very
+slate the integration was added for. Nothing in the output says so: the run
+prints a count of teams it *did* price and the rest look ordinary.
+
+The related trap is that the count printed is the size of the odds frame, not
+the number of *slate* teams matched. Those differ whenever the API's day
+includes a game the slate does not, which on this slate it did.
+
 **A hook model with no lookahead.** Checking the pitch limit only after an
 inning completes means a starter always finishes the inning that crosses his
 limit, running two thirds of an inning deep. The manager is deciding whether
@@ -560,6 +573,55 @@ all three. Settling it needs contests from other slates, which is now the
 highest-value open item in the project. Until then absolute ROI is not a
 number to act on; the ranking between candidate lineups is.
 
+### Vegas totals, finally measured
+
+`scale_to_team_total` existed from the start and no run had ever supplied it a
+number, so every team on every slate carried the league-average run
+environment. With a key configured, draft group 152195 (7 games, 2026-08-17)
+run with and without `--no-odds` at 8,000 sims and a common seed:
+
+| team | Vegas total | hitter points, odds | no odds | change |
+|---|---|---|---|---|
+| LAD | 6.24 | 83.85 | 74.66 | **+12.3%** |
+| COL | 5.26 | 59.42 | 55.61 | **+6.9%** |
+| ARI | *(none)* | 66.78 | 66.45 | +0.5% |
+| CHC | 4.46 | 59.49 | 59.51 | −0.0% |
+| DET | 4.04 | 58.32 | 59.71 | −2.3% |
+| NYM | 4.07 | 57.00 | 59.01 | −3.4% |
+| PIT | 3.96 | 50.58 | 52.69 | −4.0% |
+| SD | 3.93 | 49.95 | 52.70 | −5.2% |
+
+Simulated team runs move the same way: LAD +1.04, COL +0.49, SD −0.31. Four
+teams had no line posted (books had not put up KC/ATH or BOS/ARI a day out)
+and moved by −0.9% to +0.5%, which is the noise floor and a free control on
+the measurement.
+
+The effect on **stack preference is larger than the effect on levels**:
+Spearman between the two stack-ownership vectors is 0.72, against 0.92 for
+team points. Colorado moves from the 7th most-stacked team to the 2nd, San
+Diego from 10th to last, Detroit and the White Sox each drop three places.
+LAD was already the top stack and its stack ownership more than doubles, 0.86
+to 1.96. So the totals do not merely re-level the slate — they change what you
+would build.
+
+Two cautions the measurement itself raised.
+
+**Partial coverage is not neutral.** An unpriced team keeps the league-average
+4.45, and on this slate the median real total was 4.06, because one Coors game
+pulls the mean up while eight of ten teams sit below it. The unpriced teams
+therefore float upward for no reason at all: Athletics 14th to 9th, Kansas City
+12th to 8th, on no information. Better to know which teams are priced than to
+read the ranking as if the slate were uniformly covered.
+
+**This slate understates the `FAVOURITE_RUN_SHARE` problem.** Five of six
+games had totals between 8.0 and 8.625, so nearly all the dispersion came from
+the game total rather than the favourite split. Excluding Coors, the implied
+totals span only 3.80 to 4.46 — a 0.66-run band across ten teams, where a real
+MLB card runs closer to 3.3–5.5. At the measured 0.49 the same slate would
+span 3.51 to 4.68, a band 77% wider, with the largest single-team move being
+0.53 runs at Coors. The compression is real; how much of it is the constant
+and how much is a genuinely bunched card takes a second slate to separate.
+
 ### Stacking, and the experiment that nearly overturned it
 
 Stacking is the project's founding assumption, and the football analogy
@@ -592,6 +654,47 @@ Two rules follow. Any ROI comparison in this project needs at least the
 tool's defaults (120 candidates, 8,000 simulations, a 12,000-lineup field),
 and a result that overturns a core assumption deserves a power check before
 it is acted on, not after.
+
+### The rank fix changed levels, not the ordering
+
+`contest_rank` used to scale beaten-counts by `n_entries / field_size` and
+round, which made ranks 2 and 3 unreachable on a large contest. Because the
+bias grows with that ratio, the worry was that big-field contests had been
+flattered relative to small ones and the *ranking* in
+`optimize --compare-contests` was wrong, not just the levels.
+
+Measured directly: one pipeline run on draft group 152195, one portfolio, one
+field standing, `compare_contests` evaluated twice over 12 contests with only
+`contest_rank` swapped.
+
+| contest | entries | ratio to field | ROI inflation | P(win) ratio |
+|---|---|---|---|---|
+| $20K mini-MAX | 47,562 | 3.96 | **+31.0%** | **2.07x** |
+| $200K Rally Cap | 29,411 | 2.45 | +18.3% | 1.43x |
+| $15K mini-MAX | 17,835 | 1.49 | +7.0% | 1.09x |
+| the other nine | ≤ 7,431 | ≤ 0.62 | 0.00% | 1.00x |
+
+The inflation tracks the ratio almost exactly (correlation 0.98) and
+reproduces the previously reported 32% / 2x on the contests whose ratio
+matches the one those figures came from.
+
+**The ordering did not change: Kendall tau 1.0, zero of twelve contests
+moved.** Two reasons, and only the first generalizes. A contest with fewer
+entries than the sampled field never enters the extrapolation branch at all —
+nine of twelve here — so its ROI is identical to the last decimal. And among
+the three that were affected, ROI already increased with field size, so a bias
+monotone in field size widened the existing gaps rather than crossing any: the
+third-placed contest gained 0.31 of ROI against a 0.83 gap to fourth.
+
+That second reason is a property of this slate. The bias is monotone in
+`n_entries / field_size`, so it can only reorder when a large-field contest
+sits *below* a smaller-field one by less than its inflation. Nothing here was
+close enough. Raising `--field` above the largest contest's entry count
+removes the extrapolation entirely and is the cheapest way to stop having to
+think about it.
+
+The ROI *levels* in that run remain unusable for the reason above — no
+`--field-mean` was supplied, so they carry the whole field-strength gap.
 
 ### What is deliberately not measured
 
@@ -629,6 +732,15 @@ In rough order of expected value:
 4. **Confirm the scoring point values.** The roster rules are verified
    against DraftKings' game-type endpoint; the scoring table is rendered
    client side and is still taken from secondary sources.
+4. **Settle `FAVOURITE_RUN_SHARE`, and prefer not to need it.** One day's
+   published `team_totals` puts it near 0.49 against the 0.235 in the code,
+   consistently across dispersion assumptions. Two things would close this
+   properly: repeat the calibration over a week of cards, and route
+   `fetch_team_totals` through the per-event endpoint so a posted team total
+   is used when it exists, which is what the module already says it prefers
+   and cannot currently do. The second costs one API request per event
+   instead of one per slate and makes the constant matter only for the games
+   with no team-total market.
 5. **Weather.** Temperature and wind are real second-order park effects and
    the park factor structure already has a place for them.
 6. **Reached-on-error and pinch hitting**, the two known simulator gaps.

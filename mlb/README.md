@@ -16,7 +16,7 @@ pip install -e ".[data,dev]"
 
 mlbdfs demo                 # whole pipeline on synthetic data, no network
 mlbdfs diagnose             # check the simulator against league aggregates
-pytest                      # 120 tests, all offline
+pytest                      # 136 tests, all offline
 ```
 
 A real slate comes straight off DraftKings' API — no CSV export needed:
@@ -67,6 +67,31 @@ shrunk toward league average with a Beta-Binomial prior whose strength is
 each stat's stabilization point — so strikeout rate moves off the prior
 quickly and triples barely move at all. Then log5 against the opposing
 starter, park factors, and a damped nudge toward the Vegas implied total.
+
+#### Vegas implied totals
+
+Set `ODDS_API_KEY` and every run pulls team totals from The Odds API. Without
+it each team gets the league-average run environment, which is the largest
+public signal the projection can be missing — so the run says so loudly.
+
+Measured on a 7-game slate by running it twice with and without `--no-odds`:
+the Dodgers at Coors gained **12.3%** of team hitter points and a full run of
+simulated scoring, Colorado 6.9%, while the low-total teams lost 2–5%. Stack
+preference moves more than the levels do — Spearman 0.72 against 0.92 for
+points — with Colorado climbing from the 7th most-stacked team to the 2nd and
+San Diego falling from 10th to last. `docs/DESIGN.md` has the full table.
+
+Two things to know when reading the output:
+
+- **Not every team gets a line.** Books post west-coast games late, so a slate
+  run the day before may cover ten of fourteen teams. The uncovered ones keep
+  the league average, which on a slate with one extreme game sits well above
+  the median — so they drift *up* the stack ranking on no information.
+- **`FAVOURITE_RUN_SHARE` is about half what the market prices.** Measured
+  against real published `team_totals` it should be near 0.49, not 0.235,
+  which halves the favourite-to-underdog run gap on lopsided games. It has
+  deliberately not been retuned on one day's card; the constant and the
+  measurement are documented together in `mlbdfs/data/odds.py`.
 
 ### 2. Simulation
 
@@ -396,6 +421,16 @@ fields pay far more for the same tail. Ranking is by ROI rather than total
 expected profit, since profit is largest wherever the buy-in is largest,
 which says nothing about which contest was the better place to stake it.
 
+The rank estimator behind those ROI figures was corrected — it previously made
+finishing 2nd or 3rd unreachable in a contest larger than the sampled field.
+Re-screened on a 7-game slate across 12 contests, the fix cut ROI by up to 31%
+and P(win) by up to half, entirely on contests with more entries than the
+field; the nine smaller ones are unchanged to the last decimal. **The ordering
+did not move** (Kendall tau 1.0). Since the bias grows with
+`n_entries / field_size`, it can still reorder a slate where a big-field
+contest sits just below a small-field one — setting `--field` above the
+largest contest's entry count removes the extrapolation altogether.
+
 One caveat that matters more on small slates than large: `evaluate_lineups`
 assumes no ties, so pot-splitting is unpriced. On a two-game slate the
 winning lineup is frequently duplicated and first place is split several
@@ -493,7 +528,7 @@ mlbdfs/
   optimize/          CP-SAT lineups, contest payouts, ROI and portfolio
 tools/diagnose_sim.py   simulator realism battery
 tools/stacking_value.py stacked versus spread, priced by payout shape
-tests/                  120 offline tests
+tests/                  136 offline tests
 ```
 
 ## Docs
