@@ -297,3 +297,25 @@ def test_compare_contests_prices_one_portfolio_into_several_curves():
     flat = table.set_index("contest").loc["double_up"]
     gpp = table.set_index("contest").loc["large_gpp"]
     assert flat["p_cash"] > gpp["p_cash"]
+
+
+def test_sharing_a_field_standing_changes_nothing():
+    """The fast path must be an optimization, not an approximation."""
+    from mlbdfs.data.fixtures import make_slate
+    from mlbdfs.optimize.portfolio import evaluate_lineups, field_standing
+    from mlbdfs.pipeline import run_pipeline
+
+    slate, book = make_slate(n_games=3, seed=11)
+    result = run_pipeline(
+        slate, book, n_sims=400, n_field=500, n_candidates=10, n_lineups=4,
+        seed=11, verbose=False, allow_unconfirmed=True,
+    )
+    contest = large_gpp(5_000, 2.0)
+    args = (result.pool, result.holdout.scores, result.holdout.player_ids,
+            result.field)
+
+    fresh = evaluate_lineups(*args, contest)
+    shared = evaluate_lineups(
+        *args, contest, standing=field_standing(*args)
+    )
+    pd.testing.assert_frame_equal(fresh, shared)

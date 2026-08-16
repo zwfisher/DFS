@@ -149,6 +149,10 @@ A 15-game slate at 20k sims simulates in 14s. The optimizer dominates
 runtime at roughly 150ms per lineup; lower `--candidates` to trade
 thoroughness for speed.
 
+Pricing one portfolio into many contests costs roughly one evaluation, not
+one per contest: ranking against the field is the expensive part and does
+not depend on the payout curve, so `compare_contests` computes it once.
+
 ## Wait for lineups
 
 This is the most important operational rule in the project, and it is here
@@ -297,6 +301,22 @@ a handful of professionals field thousands of lineups and blanket the
 sensible roster space; in a single-entry contest they get one bullet each.
 The screen reports the rule and deliberately does not put a number on the
 effect — that number is not in the lobby data.
+
+Once the portfolio exists, the shape metrics stop being the best available
+answer. `optimize --compare-contests N` prices the same lineups through each
+contest's real payout table:
+
+```bash
+mlbdfs optimize --draft-group 152178 --contest-id 193832694 \
+                --compare-contests 10 --max-fee 30
+```
+
+The pattern that shows up is the one the shape metrics predict. Small
+single-entry fields give a per-entry win probability around 1.2–1.4% against
+0.14% in the big top-heavy ones, but only a third of the ROI — the big
+fields pay far more for the same tail. Ranking is by ROI rather than total
+expected profit, since profit is largest wherever the buy-in is largest,
+which says nothing about which contest was the better place to stake it.
 
 One caveat that matters more on small slates than large: `evaluate_lineups`
 assumes no ties, so pot-splitting is unpriced. On a two-game slate the

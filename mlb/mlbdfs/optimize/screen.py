@@ -168,17 +168,23 @@ def compare_contests(result, contests: list[Contest]) -> pd.DataFrame:
     Evaluation runs on the holdout simulation, not the one the pool was
     built against, for the usual reason.
     """
-    from .portfolio import evaluate_lineups
+    from .portfolio import evaluate_lineups, field_standing
 
     # ``selected.lineup`` is 1-indexed, matching evaluate_lineups' output.
     keep = set(int(n) for n in result.selected["lineup"])
     lineups = [lu for i, lu in enumerate(result.pool, start=1) if i in keep]
 
+    # Ranking against the field is the expensive part and none of it depends
+    # on the contest, so it is done once for all of them.
+    standing = field_standing(
+        lineups, result.holdout.scores, result.holdout.player_ids, result.field
+    )
+
     rows = []
     for contest in contests:
         scored = evaluate_lineups(
             lineups, result.holdout.scores, result.holdout.player_ids,
-            result.field, contest,
+            result.field, contest, standing=standing,
         )
         rows.append(
             {
@@ -191,12 +197,14 @@ def compare_contests(result, contests: list[Contest]) -> pd.DataFrame:
                 "p_win": float(scored["p_win"].mean()),
                 "p_cash": float(scored["p_cash"].mean()),
                 "cost": contest.entry_fee * len(lineups),
-                "profit": float(
-                    (scored["roi"] * contest.entry_fee).sum()
-                ),
+                "expected_profit": float((scored["roi"] * contest.entry_fee).sum()),
             }
         )
-    return pd.DataFrame(rows).sort_values("profit", ascending=False)
+    # Sorted by ROI, which is scale free. Expected profit is reported too but
+    # is a poor ranking: it is largest wherever the buy-in is largest, which
+    # is a statement about how much you staked, not about which contest was
+    # the better place to stake it.
+    return pd.DataFrame(rows).sort_values("roi", ascending=False)
 
 
 def screen(

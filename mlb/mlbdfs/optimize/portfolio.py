@@ -17,6 +17,8 @@ has to fit in memory all at once.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
 
@@ -56,6 +58,49 @@ def _rank_against_field(
     return n_field - within_row
 
 
+@dataclass
+class FieldStanding:
+    """Where each candidate finished in the field, per simulation.
+
+    This is the expensive half of an evaluation and it does not depend on
+    the contest at all -- only the payout table and the field-size rescale
+    do. Computing it once lets the same lineups be priced into a dozen
+    contests for the cost of one, which is what
+    :func:`mlbdfs.optimize.screen.compare_contests` needs.
+    """
+
+    beaten: np.ndarray     # (n_sims, n_cand) field lineups ahead of each
+    scores: np.ndarray     # (n_sims, n_cand) candidate totals
+    field_size: int
+
+
+def field_standing(
+    lineups: list[Lineup],
+    scores: np.ndarray,
+    score_player_ids: list[str],
+    field: Field,
+    chunk_size: int = 2000,
+) -> FieldStanding:
+    """Rank every candidate against the field in every simulation."""
+    lookup = {pid: i for i, pid in enumerate(score_player_ids)}
+    cand_idx = np.array(
+        [[lookup[pid] for pid in lu.player_ids] for lu in lineups], dtype=np.int32
+    )
+
+    n_sims = scores.shape[0]
+    beaten = np.empty((n_sims, len(lineups)), dtype=np.int32)
+    totals = np.empty((n_sims, len(lineups)), dtype=np.float64)
+
+    for start in range(0, n_sims, chunk_size):
+        sl = slice(start, min(start + chunk_size, n_sims))
+        cand_block = scores[sl][:, cand_idx].sum(axis=2)
+        field_block = field.score(scores, score_player_ids, sl)
+        beaten[sl] = _rank_against_field(cand_block, field_block)
+        totals[sl] = cand_block
+
+    return FieldStanding(beaten=beaten, scores=totals, field_size=field.size)
+
+
 def evaluate_lineups(
     lineups: list[Lineup],
     scores: np.ndarray,
@@ -63,40 +108,26 @@ def evaluate_lineups(
     field: Field,
     contest: Contest,
     chunk_size: int = 2000,
+    standing: FieldStanding | None = None,
 ) -> pd.DataFrame:
     """Expected ROI and finishing distribution for each candidate lineup."""
-    lookup = {pid: i for i, pid in enumerate(score_player_ids)}
-    cand_idx = np.array(
-        [[lookup[pid] for pid in lu.player_ids] for lu in lineups], dtype=np.int32
-    )
-
-    n_sims = scores.shape[0]
-    n_cand = len(lineups)
-    payout = contest.payout_table()
-    scale = contest.n_entries / field.size
-
-    total_prize = np.zeros(n_cand)
-    total_score = np.zeros(n_cand)
-    wins = np.zeros(n_cand)
-    cashes = np.zeros(n_cand)
-    last_paid = _last_paid_rank(contest)
-
-    for start in range(0, n_sims, chunk_size):
-        sl = slice(start, min(start + chunk_size, n_sims))
-        block = scores[sl]
-
-        cand_block = block[:, cand_idx].sum(axis=2)
-        field_block = field.score(scores, score_player_ids, sl)
-
-        beaten = _rank_against_field(cand_block, field_block)
-        rank = np.clip(
-            np.rint(1.0 + beaten * scale).astype(np.int64), 1, contest.n_entries
+    if standing is None:
+        standing = field_standing(
+            lineups, scores, score_player_ids, field, chunk_size
         )
 
-        total_prize += payout[rank].sum(axis=0)
-        total_score += cand_block.sum(axis=0)
-        wins += (rank == 1).sum(axis=0)
-        cashes += (rank <= last_paid).sum(axis=0)
+    n_sims = standing.scores.shape[0]
+    n_cand = len(lineups)
+    payout = contest.payout_table()
+    scale = contest.n_entries / standing.field_size
+
+    rank = np.clip(
+        np.rint(1.0 + standing.beaten * scale).astype(np.int64), 1, contest.n_entries
+    )
+    total_prize = payout[rank].sum(axis=0)
+    total_score = standing.scores.sum(axis=0)
+    wins = (rank == 1).sum(axis=0)
+    cashes = (rank <= _last_paid_rank(contest)).sum(axis=0)
 
     mean_prize = total_prize / n_sims
     return pd.DataFrame(
