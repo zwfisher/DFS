@@ -74,6 +74,13 @@ EVENT_ODDS_URL = (
 # dispersion assumption -- Poisson gives 0.508, var/mean 2.0 gives 0.471 --
 # so the range is 0.47 to 0.51, not 0.235.
 #
+# Six of those 14 games were already ~30 minutes old at the snapshot, which
+# attenuates the estimate: a team leading in the third carries an inflated
+# win probability against a run share it has partly already banked. Splitting
+# on it confirms the direction -- the 8 games not yet started fit 0.512 with
+# a correlation of 0.996, the 6 live ones 0.481. The clean subset is the
+# higher number, so 0.235 is if anything further off than the pooled fit says.
+#
 # The practical effect is that the run gap between favourite and underdog
 # comes out roughly half its market value, worst on the lopsided games where
 # it matters most: CWS at DET priced a 2.35-run gap against 1.27 here, BOS at

@@ -655,6 +655,54 @@ tool's defaults (120 candidates, 8,000 simulations, a 12,000-lineup field),
 and a result that overturns a core assumption deserves a power check before
 it is acted on, not after.
 
+### Realized ownership is usable; realized *features* are not reconstructable
+
+Contest standings give exact ownership, and ownership is fixed at lock — it
+does not move while the games play out, so even a live export carries a final
+`%Drafted` column. Contest 193887495 (594 entries, draft group 152178)
+confirmed both structural claims on a second slate: ownership sums to the
+roster slots (0.997 per single slot, 2.990 across outfielders, 1.994 across
+pitchers) and `Σ(ownership × points) = mean entry score` held to four
+decimals, 70.7141 against 70.7082.
+
+**That does not make the contest fittable.** `fit_ownership` needs the six
+pre-lock features the field reacted to — `salary`, `proj`, `ceiling`,
+`value`, `team_total`, `batting_order` — and after the slate starts they
+cannot be recovered:
+
+| feature | recoverable after lock? |
+|---|---|
+| `salary` | yes — fixed at slate creation, identical across rebuilds |
+| `batting_order` | mostly, but post-lock scratches leak in |
+| `team_total` | **no** |
+| `proj`, `ceiling`, `value` | no — all downstream of `team_total` |
+
+Re-pulling odds for a slate in progress returns live in-game lines: on
+2026-08-16 the run printed a range of 1.2 to 7.4 implied runs, where 1.2 is a
+team losing late. The Odds API's historical endpoint would fix this and is not
+on the free plan (401). Falling back to `--no-odds` is not a fix either — it
+makes `team_total` a constant, so its coefficient becomes unidentifiable and
+the other five silently absorb its signal. Measured between the two builds,
+`proj` shifts by a median 8.3% and up to 51%.
+
+A fit on those features would look entirely reasonable and be wrong, in the
+same way the ridge-penalty fit did. So: log the ownership, use it for the
+identities and for diagnosing the model, and do not re-fit from it.
+
+**The fix is operational, not analytical.** `mlbdfs project --out` writes the
+feature frame; run it *before lock* and pair it afterwards with
+`log-ownership --projected`. A slate is fittable only if someone captured its
+features while they still existed.
+
+What the second slate does support, because it survives every version of the
+contamination, is that the model **under-concentrates on chalk**. The field
+put 4.88 of 10 roster slots on its top 20 plays against the model's 2.27, and
+error on the twenty chalkiest came to 0.166–0.175 with live odds, without
+odds, and across a 27-fold temperature sweep, against 0.081 in sample.
+Temperature is the concentration knob and it does not fix this: forcing it
+lower (0.15) makes the chalk error *worse*, at 0.213, because the extra mass
+lands on the wrong players. Whatever is missing is not concentration.
+
 ### The rank fix changed levels, not the ordering
 
 `contest_rank` used to scale beaten-counts by `n_entries / field_size` and
