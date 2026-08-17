@@ -655,6 +655,56 @@ tool's defaults (120 candidates, 8,000 simulations, a 12,000-lineup field),
 and a result that overturns a core assumption deserves a power check before
 it is acted on, not after.
 
+### The second slate arrived, and most of the gap was a measurement artifact
+
+Contest 193887495 settled: 594 entries, draft group 152178, 2026-08-16, a
+different slate from 193621106. Mean entry score **101.11**, and the identity
+holds exactly — ownership-weighted realized points 101.12.
+
+Rebuilding that slate and weighting our projections by the *real* ownership
+gives an implied field mean of 84.71, a 16.2% shortfall, which looks like a
+clean replication of the 76.5-against-98.8 result. It is not. The gap
+decomposes:
+
+| | slots | implied | realized | gap |
+|---|---|---|---|---|
+| players the rebuild projected at 0.00 | 1.28 | 0.00 | 10.79 | −100% |
+| players it projected above 0.00 | 8.69 | 84.71 | 90.33 | **−6.2%** |
+| all rostered | 9.97 | 84.71 | 101.11 | −16.2% |
+
+**Two thirds of the shortfall is 31 players the rebuild lost entirely.**
+They carry 1.28 of 9.97 roster slots, they projected exactly zero, and they
+really scored 5.32 apiece — Javier Sanoja 20, Luis Torrens 16, Drew Romo 16,
+Xavier Edwards 14. They are not scratches. They are ordinary starters whose
+batting orders were gone by the time the slate was rebuilt.
+
+That this is an artifact of rebuilding rather than a pipeline defect is
+directly observable: earlier in the same session, on the same code and the
+same draft group, Bryson Stott came back `confirmed=True, batting_order=2`.
+Rebuilt after the games ended he came back `batting_order=None`, projected
+0.00 — and he had actually played, scoring 5.00. The lineup feed degrades
+once a slate is over.
+
+So **the second slate does not reproduce a 20% projection shortfall.** What
+survives is about 6%, on one slate, and even that is measured on a rebuild
+with no Vegas totals and includes whatever the field's picks did on the day —
+the chalk hit hard here, with Agustin Ramirez at 8.02 projected against 21
+actual and Heriberto Hernandez 9.51 against 20.
+
+**The 76.5 figure needs re-deriving before it is trusted.** If it was computed
+the same way — real ownership against projections from a slate rebuilt after
+the fact — it carries the same downward bias, and the conclusion that the
+projection level is ~20% low may not survive. That conclusion is now the
+thing to check rather than the thing to build on.
+
+Two things are *not* the explanation, both measured rather than argued. The
+missing Vegas totals are worth only +0.9% on the ownership-weighted
+projection (measured on 2026-08-17, where clean totals exist), because
+totals redistribute between teams far more than they move the slate level.
+And the live-versus-settled distinction is worth a great deal: the same
+contest exported mid-slate showed a mean of 70.71, 70% of its final 101.11,
+while its `%Drafted` column was already byte-identical to the final one.
+
 ### Realized ownership is usable; realized *features* are not reconstructable
 
 Contest standings give exact ownership, and ownership is fixed at lock — it
@@ -766,13 +816,13 @@ In rough order of expected value:
    them; `mlbdfs fit-ownership` re-fits.
 2. **Fit the Dirichlet concentration** from realized residuals rather than
    a prior, which needs several slates.
-3. **Settle the field-strength gap, which needs a second slate.** Real
-   ownership on contest 193621106 implies a field mean of 76.5 against a
-   realized 98.8. The identity behind that is exact, so it is either a ~20%
-   projection shortfall or a slate that ran ~20% hot. Every observation of
-   it so far comes from that one contest, so no amount of re-analysis
-   separates the two -- it takes standings from other slates. Resolving it
-   is what would make absolute ROI usable.
+3. **Re-derive the 76.5.** A second slate arrived and most of its apparent
+   shortfall turned out to be batting orders lost to rebuilding a finished
+   slate, leaving about 6% rather than 20%. If 76.5 was computed the same
+   way it is biased down by the same mechanism, and the "projection is ~20%
+   low" conclusion goes with it. Check whether the 193621106 rebuild
+   projected any rostered players at 0.00; if it did, that number is wrong
+   and every ROI level derived from it moves.
 3. **Backtest calibration.** `sim.engine.calibration_report` produces PIT
    values against realized scores; a flat histogram means the intervals are
    honest, U-shaped means too narrow. Worth running over a month of slates

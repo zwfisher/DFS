@@ -450,16 +450,27 @@ strong the simulated field is, which is set by the ownership model — see
 below. Rankings between candidate lineups are far more trustworthy than the
 ROI numbers themselves.
 
-Measured against a real 35,671-entry contest, the generated field comes in
+Measured against a real 35,671-entry contest, the generated field came in
 16 to 23 points low at every quantile from the median out to the 99.9th,
-with roughly the right spread. Two tempting explanations for that are both
-wrong, and `docs/DESIGN.md` records why: it is not the start-probability
-discount (the gap survives a fully posted slate), and it is not the field
-generator (ownership sums to the roster slots, so joints cannot move a
-mean). What is left is either a ~20% projection shortfall or a slate that
-ran ~20% hot, and every observation of it so far comes from the same
-contest. Until standings from other slates settle it, the ROI *level* is
-not a number to act on.
+with roughly the right spread, which read as a ~20% projection shortfall.
+
+A second contest on a different slate has since cut that down. Its realized
+mean was 101.11 and real ownership against our projections implied 84.71 — a
+16.2% gap, of which **two thirds turned out to be 31 rostered players the
+rebuild projected at exactly zero** because their batting orders were gone by
+the time the finished slate was reconstructed. On the slots it actually
+filled the shortfall is about 6%.
+
+So the honest current state is that the ROI *level* is still not a number to
+act on, but for a different reason than before: the measurement that set it
+is contaminated, and `docs/DESIGN.md` records what to re-derive. Rankings
+between candidate lineups remain the trustworthy output.
+
+The operational rule that falls out of this is worth more than the number:
+**a slate cannot be reconstructed after it finishes.** Ownership survives —
+`%Drafted` from a mid-slate export was byte-identical to the settled one —
+but batting orders and Vegas totals do not. Capture features before lock with
+`project --out` and pair them afterwards with `log-ownership --projected`.
 
 **Ownership is now fitted, on one slate.** The weights come from maximum
 likelihood against a real 35,671-entry contest rather than from guesses, and

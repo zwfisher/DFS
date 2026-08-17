@@ -12,25 +12,21 @@ The accumulated log. Re-import with `pd.read_csv` and pass to
 
 | contest | slate | draft group | entries | state |
 |---|---|---|---|---|
-| MLB $500 Solo Shot (193887495) | 2026-08-16 | 152178 | 594 | **live when captured** |
+| MLB $500 Solo Shot (193887495) | 2026-08-16 | 152178 | 594 | settled |
 
-## `contest-standings-193887495-LIVE-SNAPSHOT.csv`
+## `contest-standings-193887495-FINAL.csv`
 
-**The FPTS and Points columns in this file are partial.** It was exported
-while the contest was still running: DraftKings reported
-`contestState: Live`, and only 2 of 594 entries had `TimeRemaining == 0`. The
-mean entry score in it is 70.71, which is not a final score and must not be
-used as a field-strength target — doing so would bias the field mean *down*,
-toward what the ownership model already predicts, and appear to resolve the
-open field-strength question in the model's favour.
+The settled export. Mean entry score **101.11**; the identity
+`Σ(ownership × points) = mean entry score` holds at 101.12.
 
-The `%Drafted` column *is* final. Ownership is fixed at lock and does not
-move as games play out; the identity
-`Σ(ownership × points) = mean entry score` holds on this file to four
-decimal places (70.7141 against 70.7082), which is a property of the
-ownership column, not of the games being over.
+The mid-slate export of the same contest read 70.71 — 70% of final — while
+its `%Drafted` column was already byte-identical to this one across all 165
+rostered players. Ownership is fixed at lock; scores are not. Only the
+settled file may be used for a field-strength target.
 
-Re-export this contest once it settles to get a usable realized field mean.
-Contest 193621106 (draft group 151927, 2026-08-12) is a **different slate**,
-so a settled version of this one is what the field-strength gap has been
-waiting for.
+**Do not derive an implied field mean by rebuilding this slate now.** 31 of
+the 165 rostered players project at exactly 0.00 in a post-hoc rebuild
+because their batting orders are no longer retrievable, and they carry 1.28
+of 9.97 roster slots and really scored 5.32 apiece. That single artifact
+accounts for two thirds of the apparent projection shortfall. See
+`docs/DESIGN.md`.
