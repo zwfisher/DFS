@@ -158,3 +158,15 @@ def test_the_requested_window_covers_the_whole_eastern_day():
         moment = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
         assert start <= moment < start + timedelta(days=1)
         assert odds.eastern_date(stamp) == date(2026, 8, 17)
+
+
+def test_eastern_date_rejects_a_missing_or_broken_timestamp():
+    assert odds.eastern_date("") is None
+    assert odds.eastern_date("not a time") is None
+
+
+def test_eastern_date_puts_an_afternoon_game_on_its_own_day():
+    """The mirror of the night-game case: no off-by-one the other way."""
+    from datetime import date
+
+    assert odds.eastern_date("2026-08-18T17:05:00Z") == date(2026, 8, 18)

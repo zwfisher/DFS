@@ -503,3 +503,79 @@ def test_contest_rank_never_leaves_the_field():
     standing = _standing([0, 9_999, 5_000], 10_000)
     rank = contest_rank(standing, contest, seed=3)
     assert rank.min() >= 1 and rank.max() <= 500
+
+
+DK_ENTRIES = """Entry ID,Contest Name,Contest ID,Entry Fee,P,P,C,1B,2B,3B,SS,OF,OF,OF,,Instructions
+111,MLB $6K Solo Shot,193891712,$1,A (1),B (2),C (3),D (4),E (5),F (6),G (7),H (8),I (9),J (10),,1. Column A lists
+222,MLB $6K Solo Shot,193891712,$1,A (1),B (2),C (3),D (4),E (5),F (6),G (7),H (8),I (9),J (10),,2. Your current lineup
+,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev,AvgPointsPerGame
+,,,,,,,,,,,,,,,SP,Chris Sale (43854626),Chris Sale,43854626,P,10300,ATL@MIN,ATL,23.26
+"""
+
+
+def test_read_entries_ignores_the_player_pool_block(tmp_path):
+    """The export is two files stapled together and is not a rectangle.
+
+    Entry rows are 16 columns; the player pool below runs to 24, so pandas
+    cannot read it directly at all.
+    """
+    from mlbdfs.data.upload import read_entries
+
+    path = tmp_path / "DKEntries.csv"
+    path.write_text(DK_ENTRIES)
+    entries = read_entries(path)
+
+    assert list(entries["Entry ID"]) == ["111", "222"]
+    assert len(entries) == 2
+    assert entries.iloc[0]["Contest ID"] == "193891712"
+
+
+def test_write_entries_keeps_entry_ids_and_uses_one_id_per_player(tmp_path):
+    """DraftKings matches on Entry ID; lose it and nothing is edited."""
+    from types import SimpleNamespace
+
+    from mlbdfs.data.upload import read_entries, write_entries
+
+    src = tmp_path / "DKEntries.csv"
+    src.write_text(DK_ENTRIES)
+    entries = read_entries(src)
+
+    names = ["p1", "p2", "c", "flex", "second", "third", "short",
+             "of1", "of2", "of3"]
+    positions = {
+        "p1": ("P",), "p2": ("P",), "c": ("C",), "flex": ("1B", "OF"),
+        "second": ("2B",), "third": ("3B",), "short": ("SS",),
+        "of1": ("OF",), "of2": ("OF",), "of3": ("OF",),
+    }
+
+    class FakeSlate:
+        def player(self, pid):
+            return SimpleNamespace(positions=positions[pid], name=pid.upper())
+
+    ids = {p: 1000 + i for i, p in enumerate(names)}
+    ids["flex"] = 777
+
+    out_path = tmp_path / "out.csv"
+    out = write_entries(out_path, entries, [names, names], FakeSlate(), ids)
+
+    assert list(out["Entry ID"]) == ["111", "222"]
+    assert list(out["Contest Name"]) == ["MLB $6K Solo Shot"] * 2
+    # One id per player: the multi-position player carries the same id
+    # wherever he is played, and the slot only decides the column.
+    assert out.iloc[0]["1B"] == "FLEX (777)"
+    # The player-pool block is dropped; only changed entries need uploading.
+    assert "Chris Sale" not in out_path.read_text()
+
+
+def test_write_entries_refuses_a_count_mismatch(tmp_path):
+    """Silently entering fewer lineups than intended is the worst outcome."""
+    import pytest as _pytest
+
+    from mlbdfs.data.upload import read_entries, write_entries
+
+    src = tmp_path / "DKEntries.csv"
+    src.write_text(DK_ENTRIES)
+    entries = read_entries(src)
+    with _pytest.raises(ValueError, match="one to one"):
+        write_entries(tmp_path / "o.csv", entries, [["a"] * 10], None, {})

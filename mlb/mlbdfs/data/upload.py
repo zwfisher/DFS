@@ -1,7 +1,21 @@
-"""DraftKings bulk-entry CSV.
+"""DraftKings entry files.
 
-A lineup is only useful if it can be entered, and DraftKings' upload form
-is picky in two ways that are easy to miss until it rejects the file:
+A lineup is only useful if it can be entered. There are two shapes here and
+only one of them is real:
+
+``write_entries`` edits a **DKEntries export** -- the file DraftKings hands
+you from the lineups page, one row per entry you already own, carrying its
+Entry ID. This is what the upload form actually wants, and it is the only
+way to *edit* existing entries. Columns are
+``Entry ID, Contest Name, Contest ID, Entry Fee`` and then the roster slots,
+with each cell written ``Name (draftableId)``.
+
+``upload_frame`` writes bare roster-slot columns with no entry metadata.
+That was written before the real template was in hand and it does not
+import; it survives only because the slot-assignment logic underneath it is
+shared and correct.
+
+Both are picky in ways that are easy to miss until the form rejects them:
 
 **The identifier is the draftable id, not the player id.** The draftables
 feed carries three ids per row -- ``playerId``, ``playerDkId`` and
@@ -253,3 +267,94 @@ def write_upload_csv(
     frame = upload_frame(lineups, slate, ids)
     frame.to_csv(path, index=False)
     return len(frame)
+
+
+ENTRY_COLUMNS = ["Entry ID", "Contest Name", "Contest ID", "Entry Fee"]
+
+
+def read_entries(path) -> pd.DataFrame:
+    """The entry rows out of a DKEntries export.
+
+    The export is two files stapled together: your entries on the left, and
+    a copy of the whole player pool starting around column P. Only the rows
+    with an Entry ID are entries; everything below is the player list and a
+    block of instructions, and reading it as a rectangle picks up hundreds
+    of blank rows.
+
+    Note the file is not a rectangle: the entry header is 16 columns wide
+    and the player-pool rows below run to 24, so pandas cannot read it
+    directly. Rows are taken with the csv module and truncated to the
+    columns that belong to an entry.
+    """
+    import csv
+
+    width = len(ENTRY_COLUMNS + UPLOAD_COLUMNS)
+    rows = []
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        for row in csv.reader(handle):
+            if not row or not row[0].strip():
+                continue
+            if row[0].strip() == ENTRY_COLUMNS[0]:  # the header
+                continue
+            padded = (row + [""] * width)[:width]
+            rows.append(padded)
+    return pd.DataFrame(rows, columns=ENTRY_COLUMNS + UPLOAD_COLUMNS)
+
+
+def write_entries(
+    path,
+    entries: pd.DataFrame,
+    lineups: list[list[str]],
+    slate,
+    ids: dict[str, int],
+) -> pd.DataFrame:
+    """Rewrite an entry export's rosters, keeping each row's Entry ID.
+
+    One lineup per entry, in order. DraftKings matches on Entry ID, so the
+    metadata columns are carried through untouched -- lose them and the
+    upload creates nothing and edits nothing.
+
+    Only changed entries need to be in the uploaded file, so the player-pool
+    block from the original export is dropped. That is DraftKings' own
+    advice and it makes the file readable.
+
+    ``ids`` comes from :func:`canonical_draftable_ids` -- one id per player,
+    not one per slot.
+    """
+    if len(lineups) != len(entries):
+        raise ValueError(
+            f"{len(lineups)} lineups for {len(entries)} entries; "
+            "they have to correspond one to one"
+        )
+
+    rows = []
+    for (_, entry), player_ids in zip(entries.iterrows(), lineups):
+        positions = {pid: tuple(slate.player(pid).positions) for pid in player_ids}
+        assignment = assign_slots(positions)
+        if assignment is None:
+            raise ValueError(
+                f"entry {entry['Entry ID']} cannot fill the roster slots: "
+                + ", ".join(f"{slate.player(p).name} {positions[p]}"
+                            for p in player_ids)
+            )
+        by_slot: dict[str, list[str]] = {}
+        for pid, slot in assignment.items():
+            by_slot.setdefault(slot, []).append(pid)
+
+        row = [entry[c] for c in ENTRY_COLUMNS]
+        for column in UPLOAD_COLUMNS:
+            pid = by_slot[column].pop()
+            if pid not in ids:
+                raise ValueError(
+                    f"no draftable id for {slate.player(pid).name}"
+                )
+            # One id per player, never the per-slot alternate: the slot
+            # decides the column, not the id. See the module docstring --
+            # writing the alternate produces a file the form rejects, and it
+            # is exactly the mistake this signature now makes impossible.
+            row.append(f"{slate.player(pid).name} ({ids[pid]})")
+        rows.append(row)
+
+    out = pd.DataFrame(rows, columns=ENTRY_COLUMNS + UPLOAD_COLUMNS)
+    out.to_csv(path, index=False)
+    return out
