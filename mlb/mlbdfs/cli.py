@@ -485,14 +485,19 @@ def _report(result, args) -> None:
 
             target = Path(args.out).with_name(Path(args.out).stem + "_dk.csv")
             try:
+                template = getattr(args, "template", None)
                 n = write_upload_csv(
                     target,
                     [result.pool[int(r.lineup) - 1].player_ids
                      for r in result.selected.itertuples()],
                     result.slate,
                     draft_group,
+                    template=template,
                 )
-                print(f"wrote {target} ({n} lineups, DraftKings upload format)")
+                how = (f"DraftKings entry template, filled from "
+                       f"{Path(template).name}") if template else \
+                    "DraftKings upload format"
+                print(f"wrote {target} ({n} lineups, {how})")
             except Exception as exc:
                 print(f"could not write the DraftKings upload file: {exc}")
 
@@ -660,6 +665,12 @@ def build_parser() -> argparse.ArgumentParser:
             "--deterministic", action="store_true",
             help="reproducible candidate pool from the seed, at roughly 3.5x "
                  "the solve time (CP-SAT's parallel search is not)",
+        )
+        p.add_argument(
+            "--template", metavar="DKSalaries.csv",
+            help="DraftKings entry template for this slate; the _dk.csv is "
+                 "written as a filled-in copy of it, which the entry page "
+                 "accepts directly",
         )
         p.add_argument(
             "--field-mean", type=float, dest="field_mean",

@@ -262,6 +262,24 @@ The related trap is that the count printed is the size of the odds frame, not
 the number of *slate* teams matched. Those differ whenever the API's day
 includes a game the slate does not, which on this slate it did.
 
+**The upload file used the wrong id for every flexible player.** The
+draftables feed carries a separate draftable id per eligible roster slot, so
+`upload.py` looked up `(player, slot)` and wrote the id belonging to the slot
+the optimizer had assigned. Reasonable, and wrong: DraftKings' own
+`DKSalaries.csv` entry template lists exactly **one** id per player — the
+lower — and instructs you to paste it into whichever position you want.
+Checked against draft group 152195, all 61 multi-slot players are listed
+under their lowest id and the per-slot alternate appears nowhere in the
+file. Ohtani in an outfield slot was being written as `43854284`, an
+identifier the entry page never offers.
+
+The failure mode is the worst kind: it only touches multi-position players,
+which is a minority of the pool but a majority of what a stacked lineup
+leans on for salary flexibility, and a rejected import gives no indication
+which row was at fault. `canonical_draftable_ids` now returns the lowest id
+per player, and `--template` fills the user's own file so every id written
+is one that file already lists.
+
 **A hook model with no lookahead.** Checking the pitch limit only after an
 inning completes means a starter always finishes the inning that crosses his
 limit, running two thirds of an inning deep. The manager is deciding whether

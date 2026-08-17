@@ -388,11 +388,13 @@ def test_assign_slots_returns_none_when_no_assignment_exists():
     assert assign_slots(positions) is None
 
 
-def test_upload_frame_uses_the_per_slot_draftable_id():
-    """A multi-position player has a different id at each slot.
+def test_upload_frame_writes_one_id_per_player_into_the_slot_it_fills():
+    """The slot decides the *column*; it does not change the id.
 
-    Exporting one id for both is the failure this test exists to catch:
-    the file looks correct and imports as nothing.
+    The feed carries a separate draftable id per eligible slot, which used
+    to be written here. DraftKings' own entry template lists only one id per
+    player -- the lowest -- and says to paste it into whichever position you
+    want, so the per-slot alternate is an id the entry form never offers.
     """
     from types import SimpleNamespace
 
@@ -410,16 +412,35 @@ def test_upload_frame_uses_the_per_slot_draftable_id():
         def player(self, pid):
             return SimpleNamespace(positions=positions[pid], name=pid)
 
-    slot_ids = {(p, s): hash((p, s)) % 100000 for p in names
-                for s in positions[p]}
-    slot_ids[("flex", "1B")] = 111
-    slot_ids[("flex", "OF")] = 222
-
-    frame = upload_frame([names], FakeSlate(), slot_ids)
+    ids = {p: 1000 + i for i, p in enumerate(names)}
+    frame = upload_frame([names], FakeSlate(), ids)
     assert list(frame.columns) == UPLOAD_COLUMNS
-    # flex is needed at first base, so its 1B id must be the one written.
-    assert frame.iloc[0]["1B"] == 111
-    assert 222 not in list(frame.iloc[0])
+    # Three outfielders exist, so flex is needed at first base -- and carries
+    # its one and only id there.
+    assert frame.iloc[0]["1B"] == ids["flex"]
+    assert sorted(frame.iloc[0].tolist()) == sorted(ids.values())
+
+
+def test_upload_frame_reports_a_player_with_no_draftable_id():
+    from types import SimpleNamespace
+
+    import pytest
+
+    from mlbdfs.data.upload import upload_frame
+
+    names = ["p1", "p2", "c", "first", "second", "third", "short",
+             "of1", "of2", "of3"]
+    positions = {"p1": ("P",), "p2": ("P",), "c": ("C",), "first": ("1B",),
+                 "second": ("2B",), "third": ("3B",), "short": ("SS",),
+                 "of1": ("OF",), "of2": ("OF",), "of3": ("OF",)}
+
+    class FakeSlate:
+        def player(self, pid):
+            return SimpleNamespace(positions=positions[pid], name=pid.upper())
+
+    ids = {p: 1 for p in names if p != "short"}
+    with pytest.raises(ValueError, match="SHORT"):
+        upload_frame([names], FakeSlate(), ids)
 
 
 def _standing(beaten, field_size):

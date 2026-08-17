@@ -39,11 +39,29 @@ the export lists the whole 40-man and an IL bat is a guaranteed zero.
 
 With `--draft-group`, `--out` writes two files: `lineups.csv` for reading,
 and `lineups_dk.csv` for uploading. They are not interchangeable. The
-DraftKings bulk-entry form wants roster-slot columns
-(`P,P,C,1B,2B,3B,SS,OF,OF,OF`) holding **draftable ids**, and a
-multi-position player has a *different* draftable id at each slot he is
-eligible for. A file built from player ids looks right and imports as
-nothing.
+DraftKings entry grid wants roster-slot columns
+(`P,P,C,1B,2B,3B,SS,OF,OF,OF`) holding **draftable ids**, not player ids —
+a file built from player ids looks right and imports as nothing.
+
+Pass `--template DKSalaries.csv` (the file DraftKings offers on the entry
+page for that slate) and `lineups_dk.csv` is written as a filled-in copy of
+it, which the page accepts directly:
+
+```bash
+mlbdfs optimize --draft-group 152195 --contest-id 193891712 \
+                --lineups 20 --template DKSalaries.csv --out lineups.csv
+```
+
+Every id written is one the template itself lists, and ids from the wrong
+slate are rejected rather than silently entered as the wrong players.
+
+**One id per player, not one per slot.** The draftables feed carries a
+separate row and draftable id for each slot a player is eligible at —
+Shohei Ohtani is `43854283` at first base and `43854284` in the outfield —
+and it is tempting to write whichever matches the slot he was assigned.
+That is wrong. The template lists exactly one id per player, always the
+lower, and says to paste it into whichever position you want; `43854284`
+appears nowhere in it. The slot decides the *column*, never the id.
 
 **Run it after batting orders post**, usually one to three hours before
 first pitch. `optimize` refuses a slate whose lineups are mostly unposted

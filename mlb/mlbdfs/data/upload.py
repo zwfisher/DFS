@@ -5,18 +5,33 @@ is picky in two ways that are easy to miss until it rejects the file:
 
 **The identifier is the draftable id, not the player id.** The draftables
 feed carries three ids per row -- ``playerId``, ``playerDkId`` and
-``draftableId`` -- and only the last one is accepted. Worse, a
-multi-position player has a *different* draftable id for each roster slot
-he is eligible at, so the id depends on where you play him. Exporting
-``playerId`` produces a file that looks right and imports as nothing.
+``draftableId`` -- and only the last one is accepted. Exporting ``playerId``
+produces a file that looks right and imports as nothing.
 
 **The columns are roster slots, in order.** ``P,P,C,1B,2B,3B,SS,OF,OF,OF``.
 The optimizer returns a set of ten players, not an assignment, so the
 players have to be matched to slots first -- and with multi-position
 eligibility that is a bipartite matching, not a sort.
+
+**One id per player, not one per slot.** This module used to emit the
+draftable id belonging to the *slot* a player was assigned to, on the
+reasoning that the feed carries a separate row per eligible slot -- Shohei
+Ohtani is 43854283 at first base and 43854284 in the outfield. That is true
+of the feed and false of the upload form. DraftKings' own ``DKSalaries.csv``
+template lists exactly one id per player and tells you to "paste the ID into
+the roster position desired"; checked against draft group 152195, all 61
+multi-slot players are listed under the *lowest* of their draftable ids and
+the per-slot alternate appears nowhere in the template. So the alternate id
+is not an identifier the entry form ever offers, and a file built from
+per-slot ids risks being rejected on exactly the flexible players a stacked
+lineup leans on. ``canonical_draftable_ids`` returns the one the template
+uses.
 """
 
 from __future__ import annotations
+
+import csv
+from pathlib import Path
 
 import pandas as pd
 
@@ -49,6 +64,98 @@ def draftable_slot_ids(draft_group_id: int) -> dict[tuple[str, str], int]:
             continue
         out[(str(row.get("playerId")), slot)] = int(row["draftableId"])
     return out
+
+
+def canonical_draftable_ids(draft_group_id: int) -> dict[str, int]:
+    """``player id -> the single draftable id the entry form expects``.
+
+    The lowest of a player's draftable ids. That is what DraftKings' own
+    salary export lists, verified against every multi-slot player in draft
+    group 152195, and it is the id a user pastes into any slot the player is
+    eligible for.
+    """
+    from .lobby import _get_json
+
+    url = (
+        "https://api.draftkings.com/draftgroups/v1/draftgroups/"
+        f"{draft_group_id}/draftables"
+    )
+    out: dict[str, int] = {}
+    for row in _get_json(url).get("draftables", []):
+        if ROSTER_SLOT_IDS.get(row.get("rosterSlotId")) is None:
+            continue
+        key = str(row.get("playerId"))
+        draftable = int(row["draftableId"])
+        if key not in out or draftable < out[key]:
+            out[key] = draftable
+    return out
+
+
+def read_template_ids(path) -> dict[int, dict[str, str]]:
+    """``draftable id -> row`` from a DraftKings ``DKSalaries.csv``.
+
+    The template puts the entry grid in the first ten columns and the player
+    list off to the right, starting at the ``Position`` header. Parsed by
+    locating that header rather than by a fixed offset, since the block of
+    instructions above it is prose and free to change length.
+    """
+    rows = list(csv.reader(open(path, newline="", encoding="utf-8-sig")))
+    header_at = None
+    for i, row in enumerate(rows):
+        if "Position" in row and "Name + ID" in row:
+            header_at = i
+            break
+    if header_at is None:
+        raise ValueError(
+            f"{path} does not look like a DKSalaries template: no player-list "
+            "header row containing 'Position' and 'Name + ID'"
+        )
+    header = rows[header_at]
+    start = header.index("Position")
+    names = header[start:]
+    out: dict[int, dict[str, str]] = {}
+    for row in rows[header_at + 1:]:
+        if len(row) <= start or not row[start]:
+            continue
+        record = dict(zip(names, row[start:]))
+        out[int(record["ID"])] = record
+    return out
+
+
+def fill_template(template_path, out_path, lineups, slate, ids) -> int:
+    """Write the user's own template back with the entry grid filled in.
+
+    The template is returned byte-for-byte apart from the first ten columns
+    of the lineup rows, which is the safest thing to hand someone: every id
+    written is one the file itself already lists, so there is no question of
+    which id space the form wants.
+    """
+    frame = upload_frame(lineups, slate, ids)
+    known = read_template_ids(template_path)
+    unknown = sorted({int(v) for v in frame.to_numpy().ravel()} - set(known))
+    if unknown:
+        raise ValueError(
+            f"{len(unknown)} draftable id(s) are not in {Path(template_path).name} "
+            f"-- e.g. {unknown[:5]}. The template is probably for a different "
+            "slate than the one these lineups were built on."
+        )
+
+    rows = list(csv.reader(open(template_path, newline="", encoding="utf-8-sig")))
+    n_slots = len(UPLOAD_COLUMNS)
+    for n, entry in enumerate(frame.to_numpy().tolist(), start=1):
+        while n >= len(rows):
+            rows.append([""] * n_slots)
+        # Pad only far enough to hold the grid; anything already to the right
+        # of it -- the prose, the player list -- is left exactly as it was.
+        row = rows[n]
+        if len(row) < n_slots:
+            row = row + [""] * (n_slots - len(row))
+        row[:n_slots] = [str(int(v)) for v in entry]
+        rows[n] = row
+
+    with open(out_path, "w", newline="", encoding="utf-8") as handle:
+        csv.writer(handle, lineterminator="\r\n").writerows(rows)
+    return len(frame)
 
 
 def assign_slots(
@@ -91,7 +198,7 @@ def assign_slots(
 def upload_frame(
     lineups: list[list[str]],
     slate,
-    slot_ids: dict[tuple[str, str], int],
+    ids: dict[str, int],
 ) -> pd.DataFrame:
     """DraftKings-format entries, one row per lineup.
 
@@ -114,17 +221,16 @@ def upload_frame(
         for pid, slot in assignment.items():
             by_slot.setdefault(slot, []).append(pid)
 
-        row, used = {}, set()
+        row = {}
         for column in UPLOAD_COLUMNS:
             pid = by_slot[column].pop()
-            key = (pid, column)
-            if key not in slot_ids:
+            if pid not in ids:
                 raise ValueError(
-                    f"no draftable id for {slate.player(pid).name} at {column}"
+                    f"no draftable id for {slate.player(pid).name}"
                 )
+            # The slot decides the column; the id does not depend on it.
             # Duplicate column names -- build positionally, name after.
-            row[len(row)] = slot_ids[key]
-            used.add(pid)
+            row[len(row)] = ids[pid]
         rows.append(row)
 
     frame = pd.DataFrame(rows)
@@ -132,9 +238,18 @@ def upload_frame(
     return frame
 
 
-def write_upload_csv(path, lineups, slate, draft_group_id: int) -> int:
-    """Write a DraftKings bulk-entry file. Returns the number of lineups."""
-    slot_ids = draftable_slot_ids(draft_group_id)
-    frame = upload_frame(lineups, slate, slot_ids)
+def write_upload_csv(
+    path, lineups, slate, draft_group_id: int, template=None
+) -> int:
+    """Write a DraftKings bulk-entry file. Returns the number of lineups.
+
+    With ``template`` pointing at a ``DKSalaries.csv`` downloaded for this
+    slate, the ids are checked against it and the template itself is filled
+    in and written out, which is the form the entry page accepts directly.
+    """
+    ids = canonical_draftable_ids(draft_group_id)
+    if template is not None:
+        return fill_template(template, path, lineups, slate, ids)
+    frame = upload_frame(lineups, slate, ids)
     frame.to_csv(path, index=False)
     return len(frame)
