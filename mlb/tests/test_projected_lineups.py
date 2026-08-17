@@ -323,3 +323,88 @@ def test_walk_forward_accuracy_beats_a_naive_baseline():
     # Left-handed starters are where lineups are hardest to guess and most
     # worth guessing right, so accuracy there must not collapse.
     assert summary.loc["vs LHP", "mean_hits_of_9"] > 7.5
+
+
+def _slate_with_posted_lineup():
+    """One team fully posted, one team not, both with a probable starter."""
+    from mlbdfs.slate import Game, Player, Slate
+
+    players, order = [], 0
+    for team in ("AAA", "BBB"):
+        players.append(Player(
+            player_id=f"{team}-P", name=f"{team} arm", team=team,
+            opponent="BBB" if team == "AAA" else "AAA", positions=("P",),
+            salary=8000, is_pitcher=True, throws="R",
+        ))
+        for i in range(1, 13):
+            confirmed = team == "AAA" and i <= 9
+            players.append(Player(
+                player_id=f"{team}-{i}", name=f"{team} bat {i}", team=team,
+                opponent="BBB" if team == "AAA" else "AAA",
+                positions=("OF",), salary=4000, is_pitcher=False,
+                batting_order=i if confirmed else None,
+                confirmed=confirmed,
+            ))
+    game = Game(game_id="g", away="AAA", home="BBB",
+                away_total=4.5, home_total=4.5,
+                away_starter="AAA-P", home_starter="BBB-P")
+    return Slate(players=players, games=[game], name="t")
+
+
+def test_a_posted_lineup_is_recognised():
+    from mlbdfs.projections.projected_lineups import lineup_is_posted
+
+    slate = _slate_with_posted_lineup()
+    assert lineup_is_posted(slate, "AAA")
+    assert not lineup_is_posted(slate, "BBB")
+
+
+def test_a_partial_confirmation_is_not_a_posted_lineup():
+    """Eight of nine is a lineup still coming in, not a card to trust."""
+    from mlbdfs.projections.projected_lineups import lineup_is_posted
+
+    slate = _slate_with_posted_lineup()
+    ninth = next(p for p in slate.players
+                 if p.team == "AAA" and p.batting_order == 9)
+    ninth.confirmed = False
+    ninth.batting_order = None
+    assert not lineup_is_posted(slate, "AAA")
+
+
+def test_bench_players_are_not_promoted_onto_a_posted_card():
+    """The bug this exists for: projecting a nine over a lineup already out.
+
+    Guarding per player is not enough -- the estimator names nine from
+    history and every one of them who is not on the posted card gets a
+    batting order and a start probability near 0.8, which is a phantom
+    starter on the one team where the answer is certain.
+    """
+    import pandas as pd
+
+    from mlbdfs.projections.projected_lineups import (
+        BENCH_START_PROBABILITY,
+        apply_to_slate,
+    )
+
+    slate = _slate_with_posted_lineup()
+    # History that would otherwise project AAA's bench bats as starters.
+    rows = []
+    for gnum in range(12):
+        for slot, i in enumerate([10, 11, 12, 1, 2, 3, 4, 5, 6], start=1):
+            rows.append({"team": "AAA", "player_id": f"AAA-{i}",
+                         "batting_order": slot, "opp_hand": "R",
+                         "game_date": pd.Timestamp("2026-08-01")
+                         + pd.Timedelta(days=gnum)})
+    history = pd.DataFrame(rows)
+
+    apply_to_slate(slate, history, asof=None)
+
+    for player in slate.players:
+        if player.team != "AAA" or player.is_pitcher:
+            continue
+        if player.confirmed:
+            assert player.batting_order is not None
+        else:
+            assert player.batting_order is None, (
+                f"{player.name} was given a batting order over a posted card")
+            assert player.start_probability == BENCH_START_PROBABILITY

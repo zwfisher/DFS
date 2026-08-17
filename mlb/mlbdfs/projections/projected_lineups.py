@@ -237,6 +237,27 @@ def platoon_split(projection: LineupProjection, other: LineupProjection) -> pd.D
     return merged.reindex(merged["swing"].abs().sort_values(ascending=False).index)
 
 
+# What a hitter is worth when his team's card is out and he is not on it.
+# Not zero -- a late change or an in-game substitution happens -- but far
+# below the 0.05 the estimator gives a player it merely did not pick, because
+# here the lineup is known rather than guessed.
+BENCH_START_PROBABILITY = 0.01
+
+
+def lineup_is_posted(slate, team: str) -> bool:
+    """Whether ``team``'s starting nine is confirmed rather than projected.
+
+    Keyed on the batting orders actually covered, not a count of confirmed
+    players, so a duplicate or a stray confirmation cannot fake a full card.
+    """
+    orders = {
+        p.batting_order
+        for p in slate.players
+        if p.team == team and not p.is_pitcher and p.confirmed and p.batting_order
+    }
+    return orders >= set(range(1, 10))
+
+
 def apply_to_slate(
     slate,
     history: pd.DataFrame,
@@ -250,11 +271,30 @@ def apply_to_slate(
     absent it is read from the slate's own probable pitchers. Only hitters
     without a posted batting order are touched, so a partially confirmed
     slate keeps the lineups that are real.
+
+    **A team whose card is already out is skipped entirely.** Guarding only
+    per player is not enough: the estimator still projects a full nine from
+    history, and every hitter it names who is not in the posted lineup gets a
+    batting order and a start probability of 0.6 to 0.9 -- promoting bench
+    players into the lineup on exactly the teams where the answer is already
+    known for certain. Measured on draft group 152195 with twelve of fourteen
+    lineups posted, that invented one to two phantom starters on *every*
+    confirmed team, and the optimizer rostered one of them. A hitter who is
+    not on a posted card scores zero, which the project prices at about 13
+    points.
     """
     to_mlbam = id_map or {}
     projections: dict[str, LineupProjection] = {}
 
     for team in slate.teams:
+        if lineup_is_posted(slate, team):
+            for player in slate.players:
+                if player.is_pitcher or player.team != team or player.confirmed:
+                    continue
+                player.batting_order = None
+                player.start_probability = BENCH_START_PROBABILITY
+            continue
+
         hand = (hands or {}).get(team) or _opposing_hand(slate, team)
         if hand is None:
             continue
