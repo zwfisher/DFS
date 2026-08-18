@@ -57,6 +57,20 @@ def _zscore(x: np.ndarray) -> np.ndarray:
     return (x - x.mean()) / sd
 
 
+def _top_of_order(order) -> "np.ndarray":
+    """Whether a hitter bats in the top five, as a 0/1 feature.
+
+    ``build_features`` writes 0 for a hitter with no batting order, so the
+    obvious ``order <= 5`` is true for every non-starter on the slate and
+    hands them the top-of-order bonus. On draft group 152195 that was 456
+    players rather than 70. The weight is small so it never showed up as
+    anything worse than mild noise on the bench, but it is a feature that
+    means the opposite of its name for most rows it touches.
+    """
+    order = np.asarray(order, dtype=float)
+    return ((order >= 1) & (order <= 5)).astype(float)
+
+
 def _utility(g: pd.DataFrame, position: str, cfg: OwnershipConfig) -> np.ndarray:
     """Fitted utility for one position group.
 
@@ -78,7 +92,7 @@ def _utility(g: pd.DataFrame, position: str, cfg: OwnershipConfig) -> np.ndarray
         + cfg.w_ceiling * _zscore(g["ceiling"].to_numpy())
         + cfg.w_team_total * _zscore(g["team_total"].to_numpy())
         + cfg.w_salary * _zscore(g["salary"].to_numpy())
-        + cfg.w_order_top * (g["batting_order"].to_numpy() <= 5).astype(float)
+        + cfg.w_order_top * _top_of_order(g["batting_order"].to_numpy())
     )
 
 
@@ -105,6 +119,11 @@ def build_features(slate: Slate, sim: SimResult) -> pd.DataFrame:
                 "value": float(stats["mean"]) / (p.salary / 1000.0),
                 "team_total": game.implied_total(p.team),
                 "batting_order": p.batting_order or 0,
+                # The name `fit_ownership` expects; without it the
+                # documented project --out -> fit-ownership path breaks.
+                "top_of_order": float(
+                    1 <= (p.batting_order or 0) <= 5
+                ),
             }
         )
     return pd.DataFrame(rows)
@@ -155,9 +174,9 @@ def project_ownership_from_features(
         g = group.copy()
         utility = _utility(g, position, cfg)
         if position != "P":
-            utility = utility + cfg.w_order_top * (
-                g["batting_order"].to_numpy() <= 5
-            ).astype(float)
+            utility = utility + cfg.w_order_top * _top_of_order(
+                g["batting_order"].to_numpy()
+            )
         g["utility"] = utility
         g["ownership"] = _logit_shares(utility, float(slots.get(position, 1)))
         out.append(g)

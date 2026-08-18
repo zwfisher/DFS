@@ -104,3 +104,39 @@ def test_cross_validation_skips_pitchers():
 def test_fit_reports_missing_columns():
     with pytest.raises(ValueError, match="missing columns"):
         fit_ownership(pd.DataFrame({"player_id": ["a"], "position": ["C"]}))
+
+
+def test_top_of_order_excludes_players_with_no_batting_order():
+    """`order <= 5` is true for the 0 that means 'not in the lineup'.
+
+    build_features writes 0 for a hitter with no batting order, so the naive
+    test handed the top-of-order bonus to every non-starter on the slate --
+    456 players rather than 70 on draft group 152195.
+    """
+    import numpy as np
+
+    from mlbdfs.ownership.heuristic import _top_of_order
+
+    got = _top_of_order(np.array([0, 1, 3, 5, 6, 9]))
+    assert list(got) == [0.0, 1.0, 1.0, 1.0, 0.0, 0.0]
+
+
+def test_build_features_emits_the_column_the_fit_consumes():
+    """project --out has to feed fit-ownership without a translation step."""
+    from mlbdfs.data.fixtures import make_slate
+    from mlbdfs.ownership.fit import FEATURES
+    from mlbdfs.ownership.heuristic import build_features
+    from mlbdfs.projections.build import build_sim_slate
+    from mlbdfs.sim.engine import simulate_slate
+
+    slate, book = make_slate(n_games=2, seed=1)
+    sim = simulate_slate(build_sim_slate(slate, book), n_sims=60, seed=1)
+    feats = build_features(slate, sim)
+
+    missing = sorted(set(FEATURES) - set(feats.columns))
+    assert not missing, f"fit_ownership needs {missing}"
+
+    starters = feats[feats["batting_order"].between(1, 5)]
+    bench = feats[feats["batting_order"] == 0]
+    assert (starters["top_of_order"] == 1.0).all()
+    assert (bench["top_of_order"] == 0.0).all()

@@ -717,6 +717,48 @@ unconfirmed and would move every projection by a constant factor if wrong.
 That last one is cheap to check and would explain the stability of the bias
 better than anything else.
 
+### The coefficients do not transfer across slates
+
+The open question since the ownership model was fitted was whether weights
+estimated on one slate carry to another. Holding out whole position groups
+reproduced them, but that only shows transfer across *positions* within one
+slate. A second fittable slate now exists -- 8/17, features captured pre-lock
+-- and the two fits disagree in kind, not degree:
+
+| feature | hitters 8/12 | hitters 8/17 | pitchers 8/12 | pitchers 8/17 |
+|---|---|---|---|---|
+| value | 0.01 | **0.85** | −0.40 | 0.11 |
+| proj | 0.29 | 0.41 | **−0.62** | **+0.82** |
+| ceiling | 0.46 | 0.31 | 2.31 | 0.58 |
+| team_total | 0.32 | 0.19 | 0.00 | 0.11 |
+| salary | 0.45 | 0.05 | 0.06 | 0.06 |
+
+`value` was the term the 8/12 fit specifically overturned -- set at 1.85 by
+hand, fitted to approximately zero, and written up here as "what the field
+buys is ceiling and price, not bargains." On 8/17 it is the dominant hitter
+term at 0.85 while salary collapses from 0.45 to 0.05. The pitcher projection
+coefficient changes sign.
+
+The 8/17 fit is not bad on its own terms. Against the current weights on that
+slate it takes mean absolute error from 0.0138 to 0.0080, chalk error from
+0.108 to 0.064, and correlation from 0.751 to 0.916; leave-one-position-out
+holds; and the `implied_field_mean` guard that caught the ridge-penalty
+failure passes at 90.9 against 91.1. It is a good fit *to that slate*.
+
+That is the point. Two good single-slate fits that disagree on sign are
+evidence about the *method*, not about which slate is right: six features and
+roughly 180 rostered players carrying the signal is enough to fit a slate and
+not enough to fit the game. **Do not ship a refit from one slate.** What would
+settle it is several slates fitted jointly, with a whole slate held out --
+which needs pre-lock feature captures accumulated over time, and is exactly
+what `project --out` now exists to collect.
+
+The 8/12 raw data no longer exists, incidentally: no standings file, no
+feature frame, nothing in the repository or the cache. That fit survives only
+as the numbers in `OwnershipConfig`, so it cannot rejoin a pooled fit. Slates
+are only as recoverable as the files someone kept, which is the same lesson as
+the pre-lock capture, arriving from the other direction.
+
 ### An unposted card is not a discount, it is a different lineup
 
 The 8/17 build entered six Arizona hitters across twenty lineups because

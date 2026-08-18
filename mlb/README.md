@@ -16,7 +16,7 @@ pip install -e ".[data,dev]"
 
 mlbdfs demo                 # whole pipeline on synthetic data, no network
 mlbdfs diagnose             # check the simulator against league aggregates
-pytest                      # 151 tests, all offline
+pytest                      # 153 tests, all offline
 ```
 
 A real slate comes straight off DraftKings' API — no CSV export needed:
@@ -514,9 +514,17 @@ likelihood against a real 35,671-entry contest rather than from guesses, and
 against the old hand-set values on that contest: mean absolute error
 0.0222 → 0.0115, correlation with realized ownership 0.22 → 0.81, error on
 the twenty chalkiest plays 0.155 → 0.081. Holding out whole position groups
-reproduces the coefficients, so they transfer across positions — but one
-slate cannot show whether they transfer across *slates*. Re-fit as contests
-accumulate:
+reproduces the coefficients, so they transfer across positions.
+
+**They do not transfer across slates.** A second fittable slate (8/17, with
+features captured pre-lock) produces a fit that is good on its own terms —
+error 0.0138 → 0.0080, chalk 0.108 → 0.064, correlation 0.751 → 0.916 — and
+disagrees with the first in kind: `value` goes 0.01 → 0.85 for hitters,
+`salary` 0.45 → 0.05, and the pitcher projection coefficient changes sign.
+Two good single-slate fits that disagree on sign say the method needs more
+slates, not that one of them is right, so **do not ship a refit from a single
+slate**. Collect pre-lock captures and fit jointly with a whole slate held
+out:
 
 ```bash
 mlbdfs fit-ownership --features slate_features.parquet --entries 35671
@@ -576,7 +584,7 @@ mlbdfs/
   optimize/          CP-SAT lineups, contest payouts, ROI and portfolio
 tools/diagnose_sim.py   simulator realism battery
 tools/stacking_value.py stacked versus spread, priced by payout shape
-tests/                  151 offline tests
+tests/                  153 offline tests
 ```
 
 ## Docs
