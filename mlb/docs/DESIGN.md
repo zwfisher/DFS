@@ -673,55 +673,85 @@ tool's defaults (120 candidates, 8,000 simulations, a 12,000-lineup field),
 and a result that overturns a core assumption deserves a power check before
 it is acted on, not after.
 
-### The second slate arrived, and most of the gap was a measurement artifact
+### The field-strength gap is real: measured clean, it is about 19%
 
-Contest 193887495 settled: 594 entries, draft group 152178, 2026-08-16, a
-different slate from 193621106. Mean entry score **101.11**, and the identity
-holds exactly — ownership-weighted realized points 101.12.
+Three contests now, on three different slates, and the cleanest of them
+settles it.
 
-Rebuilding that slate and weighting our projections by the *real* ownership
-gives an implied field mean of 84.71, a 16.2% shortfall, which looks like a
-clean replication of the 76.5-against-98.8 result. It is not. The gap
-decomposes:
+| contest | slate | entries | implied | realized | gap |
+|---|---|---|---|---|---|
+| 193621106 | 151927, 8/12 | 35,671 | 76.5 | 98.8 | −22.6% |
+| 193887495 | 152178, 8/16 | 594 | 84.7 | 101.1 | −16.2% |
+| **193891712** | **152195, 8/17** | **7,134** | **92.3** | **114.5** | **−19.4%** |
 
-| | slots | implied | realized | gap |
-|---|---|---|---|---|
-| players the rebuild projected at 0.00 | 1.28 | 0.00 | 10.79 | −100% |
-| players it projected above 0.00 | 8.69 | 84.71 | 90.33 | **−6.2%** |
-| all rostered | 9.97 | 84.71 | 101.11 | −16.2% |
+The third is the one that counts, because its features were captured
+*before lock* — `project --out` at 17:30 ET against a card that was 12 of 14
+posted — rather than reconstructed from a finished slate. Everything the
+earlier two were criticised for is absent: rostered players projecting 0.00
+carry **0.173 of 9.96 roster slots**, against 1.28 on 8/16. Drop them
+entirely and the gap moves from −19.4% to −19.0%. The artifact explains
+essentially none of it.
 
-**Two thirds of the shortfall is 31 players the rebuild lost entirely.**
-They carry 1.28 of 9.97 roster slots, they projected exactly zero, and they
-really scored 5.32 apiece — Javier Sanoja 20, Luis Torrens 16, Drew Romo 16,
-Xavier Edwards 14. They are not scratches. They are ordinary starters whose
-batting orders were gone by the time the slate was rebuilt.
+**This corrects the conclusion recorded here after the 8/16 contest.** That
+analysis found two thirds of an apparent 16.2% shortfall was batting orders
+lost to rebuilding a finished slate, and concluded that "the second slate
+does not reproduce a 20% projection shortfall" and that the residual was
+about 6%. The contamination was real and the arithmetic was right, but the
+inference was wrong: removing the lost players also removed precisely the
+players whose projections were most wrong, and the surviving 6% was a
+property of that subset rather than an estimate of the gap. Measured where
+no subsetting is needed, the gap is ~19% — consistent with the original
+−22.6%, not with the −6% that replaced it.
 
-That this is an artifact of rebuilding rather than a pipeline defect is
-directly observable: earlier in the same session, on the same code and the
-same draft group, Bryson Stott came back `confirmed=True, batting_order=2`.
-Rebuilt after the games ended he came back `batting_order=None`, projected
-0.00 — and he had actually played, scoring 5.00. The lineup feed degrades
-once a slate is over.
+So the projection level really is roughly a fifth low, and it has now been
+seen on three slates, two contest structures and field sizes from 594 to
+35,671. `target_field_mean_score` is not a nuisance parameter to be avoided;
+it is absorbing a genuine and stable bias, and until the projections
+themselves are re-levelled it should be set from the realized mean of
+contests actually entered.
 
-So **the second slate does not reproduce a 20% projection shortfall.** What
-survives is about 6%, on one slate, and even that is measured on a rebuild
-with no Vegas totals and includes whatever the field's picks did on the day —
-the chalk hit hard here, with Agustin Ramirez at 8.02 projected against 21
-actual and Heriberto Hernandez 9.51 against 20.
+What is *not* yet known is where the shortfall lives. The obvious candidates
+are the per-plate-appearance rates, the plate-appearance counts the Markov
+chain generates, and the DraftKings scoring constants — which are still
+unconfirmed and would move every projection by a constant factor if wrong.
+That last one is cheap to check and would explain the stability of the bias
+better than anything else.
 
-**The 76.5 figure needs re-deriving before it is trusted.** If it was computed
-the same way — real ownership against projections from a slate rebuilt after
-the fact — it carries the same downward bias, and the conclusion that the
-projection level is ~20% low may not survive. That conclusion is now the
-thing to check rather than the thing to build on.
+### An unposted card is not a discount, it is a different lineup
 
-Two things are *not* the explanation, both measured rather than argued. The
-missing Vegas totals are worth only +0.9% on the ownership-weighted
-projection (measured on 2026-08-17, where clean totals exist), because
-totals redistribute between teams far more than they move the slate level.
-And the live-versus-settled distinction is worth a great deal: the same
-contest exported mid-slate showed a mean of 70.71, 70% of its final 101.11,
-while its `%Drafted` column was already byte-identical to the final one.
+The 8/17 build entered six Arizona hitters across twenty lineups because
+Arizona was the one team whose card had not posted at lock. The
+projected-lineup model gave them start probabilities of 0.92 to 0.98.
+Arizona then rested its entire core:
+
+| projected | start prob | actually |
+|---|---|---|
+| Corbin Carroll | 0.98 | did not start |
+| Gabriel Moreno | 0.97 | started |
+| Nolan Arenado | 0.97 | did not start |
+| Geraldo Perdomo | 0.96 | did not start |
+| Ryan Waldschmidt | 0.95 | started |
+| Ketel Marte | 0.92 | did not start |
+
+The real card was Vargas, Barrosa, Moreno, McCann, Lawlar, Tawa, Fernandez,
+Nootbaar, Waldschmidt — four of the six most confident projections sat, and
+the lineup that stacked five of them scored 7 points from those five and
+finished 5,869th of 7,134.
+
+The calibration table in the README says `start_probability` tops out near
+0.94 and that players above 0.90 start about 90% of the time. That is an
+average over ordinary day-to-day variation, and it is the wrong model for
+the failure that actually happens: a manager does not independently bench
+four regulars, he writes a rest-day lineup, and then the errors are perfectly
+correlated. A per-player probability cannot represent that, so the portfolio
+sees six independent 0.95s where the truth is closer to one shared coin.
+
+The practical rule that follows is stronger than `min_start_probability`:
+**treat a team whose card has not posted at lock as unrosterable, rather than
+discounted.** Not because the per-player estimate is badly calibrated on
+average, but because its errors arrive all at once and a stack converts that
+into a single catastrophic outcome. On a slate where one team is unposted and
+thirteen are, declining the one costs almost nothing.
 
 ### Realized ownership is usable; realized *features* are not reconstructable
 
@@ -762,14 +792,28 @@ feature frame; run it *before lock* and pair it afterwards with
 `log-ownership --projected`. A slate is fittable only if someone captured its
 features while they still existed.
 
-What the second slate does support, because it survives every version of the
-contamination, is that the model **under-concentrates on chalk**. The field
-put 4.88 of 10 roster slots on its top 20 plays against the model's 2.27, and
-error on the twenty chalkiest came to 0.166–0.175 with live odds, without
-odds, and across a 27-fold temperature sweep, against 0.081 in sample.
-Temperature is the concentration knob and it does not fix this: forcing it
-lower (0.15) makes the chalk error *worse*, at 0.213, because the extra mass
-lands on the wrong players. Whatever is missing is not concentration.
+The model **under-concentrates on chalk**, and this is the most reliably
+replicated finding in the project:
+
+| slate | contest | chalk error | corr | real top-20 mass | model |
+|---|---|---|---|---|---|
+| 8/12 | 35,671, in sample | 0.081 | 0.81 | — | — |
+| 8/16 | 594, single entry | 0.166 | 0.705 | 4.88 | 2.27 |
+| 8/17 | 7,134, 20-max, pre-lock | 0.109 | 0.779 | 4.34 | 2.54 |
+
+The 8/17 row is measured against features captured before lock, so it is the
+honest out-of-sample number, and it lands between the in-sample fit and the
+contaminated one. The direction is unambiguous and it does not depend on
+contest structure: a 7,134-entry 20-max field and a 594-entry single-entry
+field both put roughly 4.3 to 4.9 of ten roster slots on their top twenty
+plays where the model puts 2.3 to 2.5.
+
+It is specifically the top of the board. Blake Snell came in at 56.2% against
+a projected 23.0%, Shota Imanaga 41.6% against 14.1%, Framber Valdez 30.8%
+against 13.8% — the three most popular pitchers, each under-predicted by more
+than half. Temperature is the concentration knob and it does not fix it:
+forcing it lower makes the chalk error *worse*, because the extra mass lands
+on the wrong players. Whatever is missing is not concentration.
 
 ### The rank fix changed levels, not the ordering
 

@@ -16,7 +16,7 @@ pip install -e ".[data,dev]"
 
 mlbdfs demo                 # whole pipeline on synthetic data, no network
 mlbdfs diagnose             # check the simulator against league aggregates
-pytest                      # 136 tests, all offline
+pytest                      # 151 tests, all offline
 ```
 
 A real slate comes straight off DraftKings' API — no CSV export needed:
@@ -351,6 +351,16 @@ ones.
 Still wait for the lineups when you can. This narrows the gap; it does not
 close it, and it cannot know about a scratch announced an hour before lock.
 
+**And a team whose card is still out at lock is worse than the per-player
+numbers suggest.** On 2026-08-17 Arizona was the one unposted team of
+fourteen; the model projected six of its hitters at 0.92 to 0.98 and Arizona
+rested its whole core — Carroll, Arenado, Perdomo and Marte all sat. A
+manager does not bench four regulars independently, he writes a rest-day
+lineup, so the errors arrive perfectly correlated and a five-stack turns that
+into one catastrophic entry (7 points from five hitters, 5,869th of 7,134).
+`min_start_probability` cannot help, because the individual estimates were
+all above 0.9. When one team of fourteen is unposted, simply decline it.
+
 ### Late swap changes when "wait" means
 
 DraftKings MLB allows late swap — every draftable carries
@@ -472,19 +482,28 @@ Measured against a real 35,671-entry contest, the generated field came in
 16 to 23 points low at every quantile from the median out to the 99.9th,
 with roughly the right spread, which read as a ~20% projection shortfall.
 
-A second contest on a different slate has since cut that down. Its realized
-mean was 101.11 and real ownership against our projections implied 84.71 — a
-16.2% gap, of which **two thirds turned out to be 31 rostered players the
-rebuild projected at exactly zero** because their batting orders were gone by
-the time the finished slate was reconstructed. On the slots it actually
-filled the shortfall is about 6%.
+Three contests on three different slates now agree, and the cleanest of them
+settles it:
 
-So the honest current state is that the ROI *level* is still not a number to
-act on, but for a different reason than before: the measurement that set it
-is contaminated, and `docs/DESIGN.md` records what to re-derive. Rankings
-between candidate lineups remain the trustworthy output.
+| contest | slate | entries | implied | realized | gap |
+|---|---|---|---|---|---|
+| 193621106 | 8/12 | 35,671 | 76.5 | 98.8 | −22.6% |
+| 193887495 | 8/16 | 594 | 84.7 | 101.1 | −16.2% |
+| **193891712** | **8/17** | **7,134** | **92.3** | **114.5** | **−19.4%** |
 
-The operational rule that falls out of this is worth more than the number:
+The last one is the number to trust: its features were captured **before
+lock** rather than reconstructed afterwards, and rostered players projecting
+0.00 carry only 0.17 of 9.96 roster slots against 1.28 on the 8/16 rebuild.
+Drop them and the gap barely moves, −19.4% to −19.0%.
+
+So the projection level really is about a fifth low, across three slates, two
+contest structures, and field sizes from 594 to 35,671. Set
+`target_field_mean_score` from the realized mean of contests you actually
+enter — it is absorbing a genuine and stable bias, not papering over noise.
+Rankings between candidate lineups remain the trustworthy output; the ROI
+*level* still is not.
+
+The operational rule behind that measurement is worth as much as the number:
 **a slate cannot be reconstructed after it finishes.** Ownership survives —
 `%Drafted` from a mid-slate export was byte-identical to the settled one —
 but batting orders and Vegas totals do not. Capture features before lock with
@@ -557,7 +576,7 @@ mlbdfs/
   optimize/          CP-SAT lineups, contest payouts, ROI and portfolio
 tools/diagnose_sim.py   simulator realism battery
 tools/stacking_value.py stacked versus spread, priced by payout shape
-tests/                  136 offline tests
+tests/                  151 offline tests
 ```
 
 ## Docs

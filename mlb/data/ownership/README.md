@@ -12,7 +12,8 @@ The accumulated log. Re-import with `pd.read_csv` and pass to
 
 | contest | slate | draft group | entries | state |
 |---|---|---|---|---|
-| MLB $500 Solo Shot (193887495) | 2026-08-16 | 152178 | 594 | settled |
+| MLB $500 Solo Shot (193887495) | 2026-08-16 | 152178 | 594 | settled, post-hoc features |
+| MLB $6K Solo Shot (193891712) | 2026-08-17 | 152195 | 7,134 | settled, **pre-lock features** |
 
 ## `contest-standings-193887495-FINAL.csv`
 
@@ -30,3 +31,16 @@ because their batting orders are no longer retrievable, and they carry 1.28
 of 9.97 roster slots and really scored 5.32 apiece. That single artifact
 accounts for two thirds of the apparent projection shortfall. See
 `docs/DESIGN.md`.
+
+## `contest-standings-193891712-FINAL.csv`
+
+The 8/17 contest, and the first one whose features were captured *before*
+lock — `features-152195-prelock.csv`, written at 17:30 ET with 12 of 14 cards
+posted. That pairing is what makes it the usable measurement:
+
+- realized field mean **114.50**, identity holding at 114.495
+- implied from real ownership x pre-lock projections **92.29**, a **-19.4%** gap
+- rostered players projecting 0.00 carry **0.17 of 9.96 roster slots**, against
+  1.28 on the 8/16 rebuild; dropping them moves the gap only to -19.0%
+
+Use this pair, not the 8/16 one, for anything about the projection level.
