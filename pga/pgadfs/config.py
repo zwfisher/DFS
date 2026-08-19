@@ -133,6 +133,64 @@ DOUBLE_PLUS_STROKES = ((2, 0.80), (3, 0.15), (4, 0.05))
 
 
 @dataclass
+class ConditionsConfig:
+    """How weather turns into strokes.
+
+    The defaults are deliberately conservative. Nothing here is fitted --
+    there is no per-event conditions data to fit against -- so each
+    coefficient is a documented assumption, and `scale` exists to turn the
+    whole layer down or off in one place.
+    """
+
+    # Wind does very little to scoring until it has something to work with.
+    # Below roughly eight miles an hour the effect is inside the noise of
+    # everything else; above it, tour scoring averages rise at something like
+    # a twentieth of a stroke per mile per hour.
+    wind_threshold: float = 8.0
+    wind_coef: float = 0.055
+
+    # Firmness. `firmness_spread` is how many strokes separate the softest
+    # and firmest tee time on a day that dries by `firmness_reference` units
+    # of the temperature-times-dryness index in `weather.Conditions.drying`.
+    # The 0.30 is DataGolf's own published wave constant for this event,
+    # which is also roughly where the literature on morning/afternoon splits
+    # sits on a calm day.
+    firmness_spread: float = 0.30
+    firmness_reference: float = 15.0
+
+    # Rain softens greens, and receptive greens score better -- up to the
+    # point where it is bad enough to matter for other reasons. At the
+    # single-digit probabilities forecast here this term does nothing; it is
+    # in place for a wet week.
+    rain_coef: float = -0.25
+
+    # The forecast is not the weather. `forecast_error_sd` scales the whole
+    # conditions curve up or down per round: if the course firms up harder
+    # than forecast it does so for everyone at once, which is a correlation
+    # an independent per-golfer error would miss. `round_shock_sd` is the
+    # part that hits the whole field equally.
+    forecast_error_sd: float = 0.40
+    round_shock_sd: float = 0.25
+
+    # How long a twosome takes to play eighteen holes, which sets how much of
+    # the day's drying each group is exposed to.
+    round_hours: float = 4.25
+
+    # Minutes between tee times, and how many golfers go off together.
+    tee_interval_minutes: float = 11.0
+    group_size: int = 2
+
+    # Rounds three and four are re-paired off the leaderboard and go off
+    # later in the day for television. The exact hour is an assumption; with
+    # a fifty-man field in twosomes it barely moves the answer, because the
+    # whole weekend tee sheet fits inside four and a half hours.
+    weekend_first_tee: str = "10:30"
+
+    # One knob to turn the layer down. 0.0 reproduces a weatherless model.
+    scale: float = 1.0
+
+
+@dataclass
 class SimConfig:
     """Everything the tournament simulator is free to be wrong about."""
 
@@ -154,16 +212,14 @@ class SimConfig:
     # Variance decomposition of a player's scoring, in strokes per round.
     #   week_sd   persistent form/fit for the week, shared by all 4 rounds
     #   round_sd  round-to-round noise on top of the hole-level multinomial
-    #   wave_sd   shared shock for everyone in the same tee wave in a round
     # week_sd is what determines who wins, so it is fitted against market and
-    # DataGolf finish probabilities rather than guessed.
+    # DataGolf finish probabilities rather than guessed. The third source of
+    # shared variance -- the weather -- lives in ConditionsConfig, because it
+    # has a known structure rather than being noise.
     week_sd: float = 0.90
     round_sd: float = 1.05
-    wave_sd: float = 0.25
 
-    # Mean scoring advantage in strokes/round for the favoured wave. Benign
-    # forecast at Bellerive, so near zero; kept as a knob for windy weeks.
-    wave_edge: float = 0.0
+    conditions: "ConditionsConfig" = field(default_factory=lambda: ConditionsConfig())
 
     # How DraftKings splits a leaderboard tie; see TIE_RULE above. Resolved
     # empirically by projections.calibrate and threaded through from there.

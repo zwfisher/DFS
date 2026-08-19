@@ -176,6 +176,85 @@ unless the objective is deliberately blunted.
 `pipeline.run` reports both numbers on every run. The gap between them is
 the diagnostic.
 
+## The draw cancels, and it took building it to know that
+
+The instinct that tee times matter is right, and at this event the answer
+turns out to be "in round one, by a fifth of a stroke, and then not at all".
+Worth writing down *why*, because the reasoning generalises and the number
+does not.
+
+Three things have to line up for a draw to be worth anything over 72 holes:
+
+1. **The days have to differ.** Round two reverses round one off a single
+   tee, so a golfer who gets the good half of Thursday gets the bad half of
+   Friday. What survives is not the shape of either day's curve, it is the
+   *difference* between them. Thursday and Friday here have nearly identical
+   drying curves, so 0.244 and 0.254 strokes of within-day spread net out to
+   0.132 across the pair and about 0.01 once the weekend is included.
+2. **Something has to actually vary.** Wind is the variable that moves tour
+   scoring, and it never gets above six miles an hour on any of the four
+   days -- below the threshold where it does anything measurable. The entire
+   remaining signal is greens firming as humidity falls from 97% to 62%,
+   which is real but small.
+3. **The field has to be split.** Fifty golfers in twosomes off one tee is a
+   five-hour ramp, not two waves. Modelling it as a binary flag would have
+   thrown away most of the structure and then found nothing anyway.
+
+The layer is still worth having, for the same reason a thermometer is worth
+having on a mild day: the answer "this is worth nothing" is only useful if
+it was measured. `pgadfs conditions` prints it, and on a week at a links
+course in October it will print something else.
+
+The weekend mechanism is the one piece with no analogue in a normal model.
+Rounds three and four are paired off the leaderboard with the leaders out
+last, so the tee sheet is *endogenous*: leading after two rounds buys you
+the firmest greens. It cannot be precomputed, because it depends on the
+simulation, so the engine resolves it per simulation from the running
+leaderboard. Here it is worth about a tenth of a stroke to the leaders and
+changes nothing. At a venue with a real afternoon wind it would be a
+systematic drag on exactly the golfers whose finish position pays the most
+DraftKings points, which is not a small thing to have structurally absent
+from a model.
+
+## Course fit is small, course history is smaller
+
+It is tempting to make the venue do a lot of work, because "who fits this
+course" feels like the question with the most edge in it. Measured, it is
+not.
+
+**Course fit** at Bellerive spans ±0.09 strokes a round across the field --
+McIlroy and Woodland at one end, Si Woo Kim and Eric Cole at the other. Over
+72 holes that is about a third of a stroke, or a point and a half of
+DraftKings scoring. It is real, it is worth including, and it is roughly a
+tenth the size of the talent spread it sits on top of.
+
+The fit is rebuilt from the venue's skill weights rather than lifted from
+DataGolf's summary column, and then rescaled so its spread matches theirs.
+That is deliberate: DataGolf fits those weights properly, against results,
+and this does not, so their magnitude is the one to trust. What the rebuild
+buys is the decomposition -- being able to say that McIlroy's fit is driving
+distance and nothing else, and that Justin Thomas's negative fit is entirely
+around-the-green skill that this course will not pay him for. The two agree
+at r = 0.87, which is the right amount of agreement for a reconstruction:
+close enough to trust, different enough to be worth printing.
+
+**Course history** is smaller still, and the interesting part is that
+DataGolf's own shrinkage says so. Seventeen of the fifty have played here,
+almost all four rounds in 2018. The cap on the adjustment is 0.16 strokes a
+round and the largest value in this field is 0.032. It is in the model
+because it is free and correctly shrunk, not because it is expected to do
+anything. Anyone quoting Gary Woodland's T6 from 2018 as a reason to play
+him is quoting 0.026 strokes a round.
+
+**The par-type profile is the one venue input that earns its place**, and it
+is the one nobody talks about. Bellerive's par 5s played 0.10 strokes harder
+than a typical tour par 5 in 2018 -- long, and not the birdie holes the
+field is used to. At an identical stroke total that costs about 0.3
+DraftKings hole-scoring points a round, because the birdies it removes are
+worth +3 each and the pars it substitutes are worth +0.5. Over four rounds
+that is more than the entire course-fit adjustment for anyone in the field,
+and a model that works in strokes cannot see it at all.
+
 ## Known gaps
 
 - **Course fit is thin.** DataGolf's Bellerive adjustment spans ±0.09
@@ -185,10 +264,16 @@ the diagnostic.
   behind on Sunday, and the leader does not play conservatively. Both are
   real and both mostly affect the tails of the finish distribution, which is
   where the DraftKings finish bonus lives.
-- **Waves are only modelled for the first two rounds.** After the cut -- and
-  at a no-cut event, after round two -- the field is re-paired off the
-  leaderboard, so the draw split stops being the weather split. The code
-  reflects that; it does not model the leaderboard-based pairing itself.
+- **The forecast is hourly, so the tee sheet quantises.** Golfers going off
+  inside the same hour get identical conditions. At a quarter of a stroke of
+  spread this is invisible; in wind it would be worth interpolating.
+- **Weekend tee times are assumed, not published.** The leaderboard pairing
+  is modelled; the hour it starts is a guess, and with a fifty-man field in
+  twosomes the whole sheet fits inside four and a half hours, so it barely
+  matters.
+- **Conditions coefficients are assumed.** There is no per-event conditions
+  data on the free pages to fit wind or firmness against, so every number in
+  `ConditionsConfig` is a documented prior with a `scale` knob over it.
 - **The opponent field has no multi-entry structure.** A 150-max contest
   contains people entering 150 correlated lineups, which changes the shape
   of the top of the leaderboard. Every simulated entry here is independent.

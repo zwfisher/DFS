@@ -29,6 +29,7 @@ from ..config import (
     SimConfig,
 )
 from ..slate import Slate
+from .conditions import ConditionsSchedule
 from .holes import BIRDIE, BOGEY, DOUBLE_PLUS, EAGLE_PLUS, HoleModel
 
 _CHUNK_ELEMENTS = 2e7
@@ -66,27 +67,44 @@ class SimResult:
         return (self.position <= k).mean(axis=0)
 
 
-def simulate_strokes(slate: Slate, cfg: SimConfig, model: HoleModel) -> np.ndarray:
+def simulate_strokes(
+    slate: Slate,
+    cfg: SimConfig,
+    model: HoleModel,
+    schedule: ConditionsSchedule | None = None,
+) -> np.ndarray:
     """72-hole totals only, skipping everything DraftKings-specific.
 
     Calibration only ever looks at the leaderboard, and running it without
     the scoring pass is roughly twice as fast -- which matters when the
     variance fit calls the simulator a few dozen times.
     """
-    return _simulate(slate, cfg, model, scoring=False)  # type: ignore[return-value]
+    return _simulate(slate, cfg, model, schedule, scoring=False)  # type: ignore[return-value]
 
 
-def simulate(slate: Slate, cfg: SimConfig, model: HoleModel) -> SimResult:
-    return _simulate(slate, cfg, model, scoring=True)  # type: ignore[return-value]
+def simulate(
+    slate: Slate,
+    cfg: SimConfig,
+    model: HoleModel,
+    schedule: ConditionsSchedule | None = None,
+) -> SimResult:
+    return _simulate(slate, cfg, model, schedule, scoring=True)  # type: ignore[return-value]
 
 
-def _simulate(slate: Slate, cfg: SimConfig, model: HoleModel, *, scoring: bool):
+def _simulate(
+    slate: Slate,
+    cfg: SimConfig,
+    model: HoleModel,
+    schedule: ConditionsSchedule | None = None,
+    *,
+    scoring: bool,
+):
     rng = np.random.default_rng(cfg.seed)
     n_players = len(slate)
     n_holes = len(cfg.course.pars)
     par = cfg.course.par
     edge = slate.edge.astype(np.float32)
-    waves = slate.waves
+    weather = cfg.conditions
 
     chunk = max(1, int(_CHUNK_ELEMENTS // (n_players * n_holes * 4)))
     tau = model.tau.astype(np.float32)
@@ -139,19 +157,36 @@ def _simulate(slate: Slate, cfg: SimConfig, model: HoleModel, *, scoring: bool):
 
         for rnd in range(cfg.rounds):
             noise = rng.normal(0.0, cfg.round_sd, size=(s, n_players)).astype(np.float32)
-            # Rounds 1 and 2 are played in opposite waves; from round 3 the
-            # field is re-paired off the leaderboard and the wave split is no
-            # longer the draw split, so the shared shock stops being aligned
-            # with it.
-            shock = rng.normal(0.0, cfg.wave_sd, size=(s, 2)).astype(np.float32)
-            if rnd < 2:
-                wave_of = waves if rnd == 0 else 1 - waves
-                round_wave = shock[:, wave_of]
-                round_wave = round_wave + np.where(wave_of == 0, 1.0, -1.0) * (cfg.wave_edge / 2)
-            else:
-                round_wave = shock[:, :1]
 
-            q = edge + week + noise + round_wave          # strokes/round, + is better
+            # The day's surprise, shared by the whole field, and the error in
+            # how much the conditions curve actually tilted. Both are common
+            # shocks: if the greens firm up harder than forecast they do it
+            # for everyone at once.
+            day_shock = rng.normal(0.0, weather.round_shock_sd, size=(s, 1)).astype(np.float32)
+            tilt = (1.0 + rng.normal(0.0, weather.forecast_error_sd, size=(s, 1))).astype(np.float32)
+
+            if schedule is None:
+                penalty = np.zeros((1, 1), dtype=np.float32)
+            else:
+                fixed = schedule.fixed_adjustment(rnd)
+                if fixed is not None:
+                    penalty = fixed.astype(np.float32)[None, :]
+                else:
+                    # Paired off the leaderboard, leaders out last -- so the
+                    # golfers with most to lose play the firmest greens. The
+                    # tee sheet depends on the simulation, so this has to be
+                    # resolved inside it.
+                    order = np.argsort(strokes, axis=1, kind="stable")
+                    rank = np.empty_like(order)
+                    np.put_along_axis(
+                        rank, order, np.broadcast_to(np.arange(n_players), order.shape), axis=1
+                    )
+                    slot = n_players - 1 - rank
+                    penalty = schedule.slot_adjustment(rnd).astype(np.float32)[slot]
+
+            # `penalty` is in strokes and positive means harder, so it comes
+            # off the golfer's edge.
+            q = edge + week + noise + day_shock - penalty * tilt
             z = (q * latent_per_hole)[:, :, None]         # latent shift per hole
 
             cats = model.sample(z, rng)                   # (s, P, 18) int8

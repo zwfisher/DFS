@@ -14,10 +14,12 @@ cd pga
 uv sync --extra dev
 
 uv run pgadfs slate                 # the field, salaries and talent
+uv run pgadfs course                # what the venue rewards, and who has it
+uv run pgadfs conditions            # forecast, tee sheet, what the draw is worth
 uv run pgadfs project               # projections, finish odds, ownership
 uv run pgadfs optimize --out dk.csv # 20 lineups, ready to upload
 uv run pgadfs diagnose              # check the simulator against known numbers
-uv run pytest                       # 60 tests, all offline
+uv run pytest                       # 86 tests, all offline
 ```
 
 Everything runs from a snapshot shipped in the package, so it works with no
@@ -41,7 +43,20 @@ subscriber-only *columns* blanked rather than the rows. That leaves:
 | `course-fit-tool` | per-golfer fit for Bellerive, in strokes |
 | `fantasy-projections` | projected DraftKings ownership, score SD, tee waves, weather |
 | `betting-tool-finish` | win / top-5 / top-10 / top-20 prices, DataGolf's model and the books |
+| `course-table` | how the venue has actually played: scoring by par type, driving, rough |
+| `course-history-tool` | every golfer's record at this course, already shrunk |
 | `historical-dfs-data/sample` | one real event of DraftKings scoring, itemised |
+
+The weather widget on the fantasy page is worth calling out separately,
+because it carries something no other free page does: **every golfer's name
+next to his tee time**, unmasked, for the whole field. The projections table
+masks both. It is there to feed a map rather than a paywalled column, and it
+is the only place the two appear together.
+
+Four days of hourly weather come from the **National Weather Service**
+gridpoint API -- free, no key, and for a course in Missouri the authority
+rather than a reseller of one. DataGolf publishes an hourly forecast too,
+but only for the first round.
 
 Two of those are load-bearing. On the fantasy page the projected points and
 names are masked outside DataGolf's top five, but `dk_id` survives on every
@@ -84,7 +99,79 @@ is one logistic variable per hole and a `searchsorted` per par type rather
 than four sigmoids and four comparisons. Fifty golfers, four rounds, 20,000
 simulations takes about six seconds.
 
-### 2. Calibration
+### 2. The course, and the weather
+
+Two things about Bellerive are measured rather than assumed, and one is
+assumed and says so.
+
+**How it plays.** DataGolf's course table carries the 2018 PGA
+Championship's field-adjusted scoring broken out by par type: par 3s +0.081,
+par 4s +0.052, par 5s **-0.265**. That last number is the one that matters.
+A typical tour par 5 gives up 0.36 strokes; Bellerive's give up 0.27. Two
+holes a round of a materially lower birdie rate is worth more in DraftKings
+points than the entire course-fit adjustment, and a model that only tracks
+stroke totals cannot see it -- at the same score, a course whose difficulty
+sits in its par 5s pays about 0.3 fewer hole-scoring points a round, because
+the birdies it takes away are worth +3 each.
+
+**What it rewards.** The course-fit tool gives every venue a weight on each
+of five skills. Against the average tour course Bellerive is:
+
+| | weight | vs tour average | percentile |
+|---|---|---|---|
+| Driving distance | 0.821 | **+0.084** | 64% |
+| Driving accuracy | 0.543 | +0.026 | 54% |
+| Putting | 0.503 | +0.023 | 58% |
+| Approach | 0.690 | -0.006 | 46% |
+| Around the green | 0.346 | **-0.048** | 26% |
+
+Length is what it pays for; short game is what it does not. The course table
+says why the second half of that is true: the fairways are 35 yards wide,
+the field hit 65% of them, and missing one costs 0.40 strokes -- **the 13th
+most punishing rough on tour**. Miss a green here and scrambling skill does
+not save you, so the golfers whose edge is around the green get less of it.
+
+Rather than take DataGolf's summary column, the fit is rebuilt from those
+weights against each golfer's standardized skills, then rescaled to
+DataGolf's spread. The two agree at a correlation of 0.87, and the rebuilt
+version breaks out by axis, so `pgadfs course` can say not just that Rory
+McIlroy gains 0.065 strokes a round here but that 0.076 of it is driving
+distance and he gives a little back everywhere else. The whole effect spans
+±0.09 strokes a round across the field. That is real and it is small.
+
+**Course history** is included and should be expected to do nothing.
+Seventeen of the fifty have played Bellerive, almost all of them four rounds
+in 2018. DataGolf shrinks that to a cap of 0.16 strokes a round; the largest
+value in this field is Si Woo Kim at -0.032.
+
+**The draw.** Fifty golfers, no cut, twosomes eleven minutes apart off one
+tee: 9:03 to 1:55, a five-hour ramp rather than two waves. So conditions are
+modelled as a continuous function of tee time -- the average wind,
+temperature and humidity over each golfer's actual four and a quarter hours
+on the course -- and on the weekend the tee sheet is drawn off the simulated
+leaderboard, leaders last, so whoever is leading plays the firmest greens.
+
+What that is worth this week is the useful part of the answer:
+
+| round | tee sheet | wind | draw worth |
+|---|---|---|---|
+| 1 | published | 3-5 mph | 0.244 strokes |
+| 2 | reverses round 1 | 2-3 mph | 0.254 strokes |
+| 3 | leaderboard | 6 mph | 0.121 strokes |
+| 4 | leaderboard | 5-6 mph | 0.099 strokes |
+| **1 + 2 together** | | | **0.132 strokes** |
+| **all four rounds** | | | **~0.01 strokes** |
+
+Wind contributes nothing -- it never reaches the threshold where tour
+scoring notices it, on any of the four days. The entire signal is the greens
+firming up as the humidity falls from 97% to 62%, and round two reverses
+round one, so it cancels. **The tee-time draw is worth a fifth of a stroke
+in round one and essentially zero over 72 holes.** For this contest that is
+a reason not to pay for it; the machinery is there because a windy week, or
+a one-round slate, is a different answer, and `pgadfs conditions` will say
+so.
+
+### 3. Calibration
 
 Three things have to be right, and none of them is guessed.
 
@@ -116,7 +203,7 @@ is about 16% more spread out than DataGolf's general skill ratings say,
 which is what you would expect of ratings compressed by the strength of the
 opposition an elite no-cut field has been facing.
 
-### 3. Ownership and the field
+### 4. Ownership and the field
 
 DataGolf publishes projected ownership for every golfer, so the level does
 not have to be modelled. Three things do.
@@ -157,7 +244,7 @@ golfer is far likelier to be rejected than one without him, so he shows up
 at a tenth of his real ownership and the fit spends its time fighting the
 sampler instead of the projection.
 
-### 4. Lineups
+### 5. Lineups
 
 Candidates come from CP-SAT under randomized objectives: each solve
 maximises the total under one sampled simulation, so the pool contains
@@ -272,15 +359,28 @@ Fitzpatrick lower. The variance fit uses the market's *shape* but cannot use
 its ordering, because the odds page masks the names. Where the projections
 sit above DataGolf's own, that disagreement is the reason.
 
-**Bellerive's hole difficulties are a shape, not a measurement.** The PGA
-Tour has not been here since 2018. `config.BELLERIVE.hole_offsets` is a
-plausible spread that sums to zero; the level is calibrated, the spread is
-assumed. Swap in real hole averages once rounds are in the books.
+**Bellerive's per-hole difficulties are a shape, not a measurement.** The
+scoring by *par type* is measured, from 2018, and that is the part that
+moves DraftKings points. Which individual hole is hardest is not:
+`config.BELLERIVE.hole_offsets` is a plausible spread that sums to zero.
+It affects the variance within a round and nothing else. Swap in real hole
+averages once rounds are in the books.
+
+**The conditions layer is the least anchored thing here.** Every coefficient
+in `ConditionsConfig` is a documented assumption, because there is no
+per-event conditions data to fit against. The firmness spread is set from
+DataGolf's own published wave constant for this event. Set
+`ConditionsConfig.scale = 0` to remove the layer entirely -- on this
+forecast that changes a 72-hole projection by about a hundredth of a stroke,
+which is the honest reason not to worry about it this week.
+
+**Hourly forecast resolution quantises the tee sheet.** Golfers going off
+within the same hour get identical conditions, so the draw adjustment comes
+in steps rather than smoothly. At a quarter of a stroke of total spread this
+does not matter; in a windy week it would be worth interpolating.
 
 **No late swap.** DraftKings golf locks the whole lineup at the first tee
-time, so the wave model matters only through weather, and the forecast for
-Thursday is benign -- 6 mph, no rain. In a windy week, raise
-`SimConfig.wave_sd` and set `wave_edge`.
+time, so none of this can be reacted to once the tournament starts.
 
 ## Layout
 
@@ -289,13 +389,14 @@ pgadfs/
   config.py          scoring constants, roster rules, the course, every tunable
   slate.py           the field, joined across sources
   pipeline.py        end to end, including the held-out ROI check
-  data/              DraftKings and DataGolf clients, name joining, snapshots
+  data/              DraftKings, DataGolf and NWS clients, name joining, snapshots
   sim/holes.py       the proportional-odds hole model
+  sim/conditions.py  weather and the tee sheet, as strokes
   sim/engine.py      four rounds, vectorized across simulations and golfers
-  projections/       talent to strokes, and the calibration
+  projections/       talent to strokes, course fit, and the calibration
   ownership/         projected ownership, feasibility, the opponent field
   optimize/          CP-SAT lineups, payout curve, ROI, portfolio
   tools_diagnose.py  the realism battery
-tests/               60 offline tests
+tests/               86 offline tests
 docs/DESIGN.md       why the modelling decisions went the way they did
 ```

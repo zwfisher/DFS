@@ -9,8 +9,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from datetime import datetime, timedelta
+
 from .config import Config
 from .data.cache import cache_dir
+from .data.weather import Forecast, load_forecast
 from .optimize.contest import ContestEvaluator, Payouts
 from .optimize.milp import candidate_pool
 from .optimize.portfolio import Portfolio, select_portfolio
@@ -18,6 +21,7 @@ from .ownership.field import Field, build_field
 from .ownership.model import enforce_salary_feasibility, projected_ownership, sample_ownership
 from .projections.build import projection_table
 from .projections.calibrate import Calibration, apply_calibration, calibrate
+from .sim.conditions import ConditionsSchedule, build_schedule
 from .sim.engine import SimResult, simulate
 from .slate import Slate, build_slate
 
@@ -26,6 +30,8 @@ from .slate import Slate, build_slate
 class RunResult:
     slate: Slate
     calibration: Calibration
+    forecast: Forecast | None
+    schedule: ConditionsSchedule | None
     sim: SimResult
     projections: pd.DataFrame
     ownership: np.ndarray
@@ -96,9 +102,10 @@ def load_or_fit_calibration(
             week_sd=blob["week_sd"],
             tie_rule=blob["tie_rule"],
             field_score_to_par=blob["field_score_to_par"],
+            par_offsets={int(k): v for k, v in blob.get("par_offsets", {}).items()},
             diagnostics=blob.get("diagnostics", {}),
         )
-    cal = calibrate(slate, cfg.sim, offline=offline)
+    cal = calibrate(slate, cfg.sim, offline=offline, course_name=slate.course)
     path.write_text(
         json.dumps(
             {
@@ -108,6 +115,7 @@ def load_or_fit_calibration(
                 "week_sd": cal.week_sd,
                 "tie_rule": cal.tie_rule,
                 "field_score_to_par": cal.field_score_to_par,
+                "par_offsets": cal.par_offsets,
                 "diagnostics": {
                     k: cal.diagnostics.get(k, {}) for k in ("variance_fit", "scoring_level", "tie_rule")
                 },
@@ -116,6 +124,50 @@ def load_or_fit_calibration(
         )
     )
     return cal
+
+
+def build_conditions(
+    slate: Slate, cfg: Config, *, offline: bool
+) -> tuple[Forecast | None, ConditionsSchedule | None]:
+    """The four days of weather, and where each golfer sits on each tee sheet.
+
+    Round one's tee sheet is published; round two reverses it; rounds three
+    and four are drawn off the leaderboard and get resolved inside the
+    simulation. The forecast covers the week, so all four rounds get real
+    conditions rather than round one's repeated.
+    """
+    if not slate.contest or not slate.contest.start_time:
+        return None, None
+    try:
+        forecast = load_forecast(offline=offline)
+    except (OSError, KeyError, ValueError):
+        return None, None
+
+    # The contest locks at the first tee time, in UTC. DataGolf publishes the
+    # same moment as a local clock time, so the two together give the offset
+    # without needing a timezone database.
+    lock = datetime.fromisoformat(slate.contest.start_time.replace("Z", "+00:00"))
+    first_local = min(
+        (g.tee_time for g in slate.golfers if g.tee_time),
+        key=lambda t: datetime.strptime(t, "%I:%M %p").time(),
+        default=None,
+    )
+    if first_local is None:
+        return forecast, None
+    opening = datetime.strptime(first_local, "%I:%M %p").time()
+    day_one = lock.date()
+    first_tee = [datetime.combine(day_one, opening), datetime.combine(day_one + timedelta(days=1), opening)]
+    weekend = datetime.strptime(cfg.sim.conditions.weekend_first_tee, "%H:%M").time()
+    first_tee += [
+        datetime.combine(day_one + timedelta(days=2), weekend),
+        datetime.combine(day_one + timedelta(days=3), weekend),
+    ]
+    days = [t.date().isoformat() for t in first_tee]
+
+    # Tee slots are group indices; the schedule indexes golfers, and a group
+    # of `group_size` shares a time.
+    slots = slate.tee_slots * cfg.sim.conditions.group_size
+    return forecast, build_schedule(forecast, days, first_tee, slots, cfg.sim.conditions)
 
 
 def run(
@@ -129,6 +181,7 @@ def run(
 ) -> RunResult:
     cfg = cfg or Config()
     slate = build_slate(contest_id, course, offline=offline, salaries_csv=salaries_csv)
+    forecast, schedule = build_conditions(slate, cfg, offline=offline)
 
     cal = load_or_fit_calibration(slate, cfg, contest_id, offline=offline, refit=refit)
     scaled = apply_calibration(slate, cal)
@@ -138,7 +191,12 @@ def run(
         tie_rule=cal.tie_rule,
         field_score_to_par=cal.field_score_to_par,
     )
-    sim = simulate(scaled, sim_cfg, cal.model(cfg.sim.course))
+    # The conditions layer is deliberately absent from the calibration above
+    # and present here. It is centred on the field, so it cannot move the
+    # scoring level the calibration fits; and over 72 holes its net spread is
+    # under a hundredth of a stroke, because round two reverses round one.
+    # What it does change is a single round -- which is where it belongs.
+    sim = simulate(scaled, sim_cfg, cal.model(cfg.sim.course), schedule)
 
     raw_own = projected_ownership(slate, cfg.ownership, points=sim.points.mean(axis=0))
     own, own_info = enforce_salary_feasibility(
@@ -200,6 +258,8 @@ def run(
     return RunResult(
         slate=slate,
         calibration=cal,
+        forecast=forecast,
+        schedule=schedule,
         sim=sim,
         projections=projections,
         ownership=own,

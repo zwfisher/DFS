@@ -126,18 +126,6 @@ def test_week_variance_flattens_the_win_distribution():
     assert (tight.position[:, best] == 1).mean() > (loose.position[:, best] == 1).mean()
 
 
-def test_wave_shock_only_touches_the_first_two_rounds():
-    slate = toy_slate(n=12)
-    model = toy_model()
-    base = SimConfig(n_sims=3000, seed=23, wave_sd=0.0)
-    windy = replace(base, wave_sd=1.5)
-    calm_sim = simulate(slate, base, model)
-    windy_sim = simulate(slate, windy, model)
-    # A shared shock adds variance to totals without moving the mean much.
-    assert windy_sim.strokes.std(axis=0).mean() > calm_sim.strokes.std(axis=0).mean()
-    assert abs(windy_sim.strokes.mean() - calm_sim.strokes.mean()) < 1.0
-
-
 def test_birdie_counts_are_consistent_with_hole_points():
     slate = toy_slate()
     sim = simulate(slate, SimConfig(n_sims=1000, seed=29), toy_model())

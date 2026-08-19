@@ -25,6 +25,7 @@ isn't: the ordering comes from DataGolf's skill ratings.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from dataclasses import field as dataclasses_field
 
 import numpy as np
 from scipy.optimize import brentq, minimize
@@ -33,7 +34,7 @@ from ..config import FINISH_POINTS, Course, SimConfig
 from ..data import datagolf as dg
 from ..data.dkpoints import load_sample
 from ..sim.engine import finish_points, simulate, simulate_strokes
-from ..sim.holes import HoleModel
+from ..sim.holes import HoleModel, par_type_offsets
 from ..slate import Slate
 
 _GH_NODES, _GH_WEIGHTS = np.polynomial.hermite.hermgauss(15)
@@ -63,9 +64,20 @@ class Calibration:
     tie_rule: str
     field_score_to_par: float
     diagnostics: dict
+    par_offsets: dict[int, float] = dataclasses_field(default_factory=dict)
 
     def model(self, course: Course) -> HoleModel:
-        return HoleModel(course, self.latent_per_stroke, self.course_shift)
+        return HoleModel(course, self.latent_per_stroke, self.course_shift, self.par_offsets)
+
+
+def measured_par_offsets(course: str, pars: tuple[int, ...], *, offline: bool = False) -> dict[int, float]:
+    """Par-type scoring for a venue that has hosted, or nothing if it hasn't."""
+    try:
+        profile = dg.load_course_table(course, offline=offline)
+    except (KeyError, OSError):
+        return {}
+    measured = {3: profile.par_3_score, 4: profile.par_4_score, 5: profile.par_5_score}
+    return par_type_offsets(measured, pars)
 
 
 def fit_course(
@@ -73,6 +85,7 @@ def fit_course(
     edges: np.ndarray,
     target_score_to_par: float,
     noise_sd: float,
+    par_offsets: dict[int, float] | None = None,
 ) -> tuple[float, float]:
     """Solve `latent_per_stroke` and `course_shift` together.
 
@@ -83,13 +96,13 @@ def fit_course(
 
     def shift_for(mu: float) -> float:
         def gap(shift: float) -> float:
-            model = HoleModel(course, mu, shift)
+            model = HoleModel(course, mu, shift, par_offsets)
             return float(_expected_round_score(model, edges, noise_sd).mean()) - target_score_to_par
 
         return brentq(gap, -6.0, 6.0, xtol=1e-8)
 
     def slope_error(mu: float) -> float:
-        model = HoleModel(course, mu, shift_for(mu))
+        model = HoleModel(course, mu, shift_for(mu), par_offsets)
         lo, hi = _expected_round_score(model, np.array([0.5, -0.5]), noise_sd)
         return float(hi - lo) - 1.0
 
@@ -113,6 +126,7 @@ def fit_variance(
     *,
     n_sims: int = 6000,
     markets: dict[str, int] | None = None,
+    par_offsets: dict[int, float] | None = None,
 ) -> tuple[float, float, dict]:
     """Fit the talent multiplier and week-to-week spread to market prices.
 
@@ -137,10 +151,10 @@ def fit_variance(
             return 1e6
         edges = (base_talent - centre) * mult
         noise_sd = float(np.hypot(week_sd, cfg.round_sd))
-        mu, shift = fit_course(course, edges, slate.field_score_to_par, noise_sd)
+        mu, shift = fit_course(course, edges, slate.field_score_to_par, noise_sd, par_offsets)
         scaled = _scaled_slate(slate, edges)
         run_cfg = replace(cfg, n_sims=n_sims, week_sd=week_sd)
-        strokes = simulate_strokes(scaled, run_cfg, HoleModel(course, mu, shift))
+        strokes = simulate_strokes(scaled, run_cfg, HoleModel(course, mu, shift, par_offsets))
         sim = _sorted_probability_vectors(strokes, markets)
         err = 0.0
         for name, target in targets.items():
@@ -188,6 +202,7 @@ def fit_scoring_level(
     n_sims: int = 8000,
     lo: float = -2.0,
     hi: float = 2.0,
+    par_offsets: dict[int, float] | None = None,
 ) -> tuple[float, dict]:
     """Fit how the course will actually play, from DataGolf's DK projections.
 
@@ -217,9 +232,9 @@ def fit_scoring_level(
 
     def error(level: float) -> float:
         if level not in cache:
-            mu, shift = fit_course(course, edges, level, noise_sd)
+            mu, shift = fit_course(course, edges, level, noise_sd, par_offsets)
             run = replace(cfg, n_sims=n_sims, field_score_to_par=level)
-            got = simulate(scaled, run, HoleModel(course, mu, shift)).mean()[idx]
+            got = simulate(scaled, run, HoleModel(course, mu, shift, par_offsets)).mean()[idx]
             cache[level] = float(np.mean(got - target))
         return cache[level]
 
@@ -228,9 +243,9 @@ def fit_scoring_level(
         return best, {"reason": "anchors outside the bracket", "residual": error(best)}
 
     level = brentq(error, lo, hi, xtol=1e-3, rtol=1e-4)
-    mu, shift = fit_course(course, edges, level, noise_sd)
+    mu, shift = fit_course(course, edges, level, noise_sd, par_offsets)
     run = replace(cfg, n_sims=n_sims, field_score_to_par=level)
-    got = simulate(scaled, run, HoleModel(course, mu, shift)).mean()
+    got = simulate(scaled, run, HoleModel(course, mu, shift, par_offsets)).mean()
     return level, {
         "field_score_to_par": level,
         "published": {slate.golfers[i].name: float(v) for i, v in anchors.items()},
@@ -309,8 +324,12 @@ def calibrate(
     n_sims: int = 6000,
     offline: bool = False,
     passes: int = 2,
+    course_name: str | None = None,
 ) -> Calibration:
     """Run the whole fit and return the parameters the simulator should use."""
+    par_offsets = (
+        measured_par_offsets(course_name, cfg.course.pars, offline=offline) if course_name else {}
+    )
     odds = dg.load_finish_odds(offline=offline)
     model_v = dg.finish_probability_vectors(odds, "model")
     market_v = dg.finish_probability_vectors(odds, "market")
@@ -324,20 +343,21 @@ def calibrate(
     info: dict = {}
     for _ in range(passes):
         mult, week_sd, info = fit_variance(
-            slate, replace(cfg, week_sd=week_sd), cfg.course, targets, n_sims=n_sims
+            slate, replace(cfg, week_sd=week_sd), cfg.course, targets,
+            n_sims=n_sims, par_offsets=par_offsets,
         )
 
     edges = (slate.talent - slate.talent.mean()) * mult
     noise_sd = float(np.hypot(week_sd, cfg.round_sd))
 
     level, level_info = fit_scoring_level(
-        slate, replace(cfg, week_sd=week_sd), cfg.course, edges
+        slate, replace(cfg, week_sd=week_sd), cfg.course, edges, par_offsets=par_offsets
     )
-    mu, shift = fit_course(cfg.course, edges, level, noise_sd)
+    mu, shift = fit_course(cfg.course, edges, level, noise_sd, par_offsets)
 
     scaled = _scaled_slate(slate, edges)
     tie_rule, tie_info = fit_tie_rule(
-        scaled, replace(cfg, week_sd=week_sd), HoleModel(cfg.course, mu, shift)
+        scaled, replace(cfg, week_sd=week_sd), HoleModel(cfg.course, mu, shift, par_offsets)
     )
 
     return Calibration(
@@ -347,6 +367,7 @@ def calibrate(
         week_sd=week_sd,
         tie_rule=tie_rule,
         field_score_to_par=level,
+        par_offsets=par_offsets,
         diagnostics={
             "variance_fit": info,
             "scoring_level": level_info,

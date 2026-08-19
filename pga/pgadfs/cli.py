@@ -179,6 +179,98 @@ def cmd_optimize(args) -> int:
     return 0
 
 
+def cmd_course(args) -> int:
+    """What the venue rewards, and which golfers have it."""
+    from .data import datagolf as dgd
+    from .projections.coursefit import build_fits, course_profile
+
+    offline = not args.live
+    profile = course_profile(args.course, offline=offline)
+    try:
+        measured = dgd.load_course_table(args.course, offline=offline)
+    except KeyError:
+        measured = None
+
+    if measured:
+        print(f"{measured.name}: par {measured.par}, {measured.yardage:,.0f} yards, "
+              f"last played {measured.score_to_par:+.3f} to par per round")
+        print(f"  par 3 {measured.par_3_score:+.3f}   par 4 {measured.par_4_score:+.3f}   "
+              f"par 5 {measured.par_5_score:+.3f}   (per hole, relative to par)")
+        print(f"  {measured.driving_distance:.0f} yards off the tee, "
+              f"{100 * measured.driving_accuracy:.1f}% fairways, {measured.fairway_width:.0f} yards wide")
+        print(f"  missing the fairway costs {measured.rough_penalty:.2f} strokes "
+              f"-- rank {measured.rough_penalty_rank:.0f} of the courses on tour")
+
+    print("\nwhat it pays for, against an average tour course:")
+    for axis, emphasis, percentile in profile.ranked():
+        bar = ("+" if emphasis >= 0 else "-") * max(1, int(abs(emphasis) * 120))
+        print(f"  {axis:<18}{emphasis:+7.3f}  {percentile:>5.0%} percentile  {bar}")
+
+    slate = build_slate(args.contest, args.course, offline=offline)
+    fits = build_fits(slate.names, args.course, offline=offline)
+    rows = []
+    for g in slate.golfers:
+        f = fits.get(dg.normalize_name(g.name))
+        if not f:
+            continue
+        row = {"golfer": g.name, "salary": g.salary, "fit": f.fit, "history": f.history,
+               "total": f.total}
+        row.update({a.split()[-1].lower(): v for a, v in f.components.items()})
+        rows.append(row)
+    frame = pd.DataFrame(rows).sort_values("total", ascending=False)
+    print("\ncourse fit, broken out by which part of the game earns it (strokes per round):")
+    print(_fmt(pd.concat([frame.head(args.top // 2), frame.tail(args.top // 2)])))
+    return 0
+
+
+def cmd_conditions(args) -> int:
+    """The forecast, the tee sheet, and what the draw is worth."""
+    from . import pipeline as pipe
+
+    cfg = _config(args)
+    offline = not args.live
+    slate = build_slate(args.contest, args.course, offline=offline)
+    forecast, schedule = pipe.build_conditions(slate, cfg, offline=offline)
+    if forecast is None or schedule is None:
+        print("no forecast available")
+        return 1
+
+    print(f"forecast: {len(forecast)} hours\n")
+    rows = []
+    for i, rc in enumerate(schedule.rounds):
+        rows.append({
+            "round": i + 1,
+            "day": rc.day,
+            "first tee": rc.tee_times[0].strftime("%H:%M"),
+            "last tee": rc.tee_times[-1].strftime("%H:%M"),
+            "wind lo": rc.wind.min(),
+            "wind hi": rc.wind.max(),
+            "rain%": 100 * rc.precip.mean(),
+            "draw worth": rc.spread,
+            "tee sheet": "published" if i == 0 else ("reversed" if i == 1 else "leaderboard"),
+        })
+    print(_fmt(pd.DataFrame(rows)))
+
+    r1 = schedule.fixed_adjustment(0)
+    r2 = schedule.fixed_adjustment(1)
+    net = r1 + r2
+    print(f"\nrounds 1 and 2 together: the draw is worth {net.max() - net.min():.3f} strokes, "
+          f"against {schedule.rounds[0].spread:.3f} in round one alone --")
+    print("round two reverses round one, so most of it cancels.")
+
+    order = np.argsort(np.array([g.tee_slot for g in slate.golfers]))
+    print("\nby golfer (negative is the better half of the draw):")
+    frame = pd.DataFrame({
+        "golfer": [slate.golfers[i].name for i in order],
+        "tee": [slate.golfers[i].tee_time for i in order],
+        "R1": [r1[i] for i in order],
+        "R2": [r2[i] for i in order],
+        "R1+R2": [net[i] for i in order],
+    })
+    print(_fmt(pd.concat([frame.head(6), frame.tail(6)])))
+    return 0
+
+
 def cmd_diagnose(args) -> int:
     from .tools_diagnose import diagnose
 
@@ -217,6 +309,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--top", type=int, default=20)
     p.add_argument("--out", default=None, help="write a DraftKings upload CSV")
     p.set_defaults(func=cmd_optimize)
+
+    p = subs.add_parser("course", help="what the venue rewards, and who has it")
+    _common(p)
+    p.add_argument("--top", type=int, default=16)
+    p.set_defaults(func=cmd_course)
+
+    p = subs.add_parser("conditions", help="forecast, tee sheet, and what the draw is worth")
+    _common(p)
+    p.set_defaults(func=cmd_conditions)
 
     p = subs.add_parser("diagnose", help="check the simulator against known aggregates")
     _common(p)

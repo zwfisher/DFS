@@ -37,6 +37,8 @@ PAGES = {
     "course_fit": "/course-fit-tool",
     "fantasy": "/fantasy-projections",
     "finish_odds": "/betting-tool-finish",
+    "course_table": "/course-table",
+    "course_history": "/course-history-tool",
 }
 
 # A JS single-quoted string literal: any run of non-quote, non-backslash
@@ -90,8 +92,13 @@ def _prune(name: str, payloads: dict, course: str | None) -> dict:
         data = payloads["reload_data"]
         courses = [course] if course else [k for k in data if k != "players"]
         out: dict = {"players": {}}
+        # The tour-average weights are what makes a course's own weights mean
+        # anything, so they survive the prune even though no course keys them.
+        for baseline in ("Avg PGA Tour Course", "Avg PGA Tour Course (Rel)"):
+            if baseline in data:
+                out[baseline] = data[baseline]
         for c in courses:
-            out[c] = {"coefs": data[c].get("coefs")}
+            out[c] = {"coefs": data[c].get("coefs"), "coefs_rel": data[c].get("coefs_rel")}
             block = data["players"][c]
             out["players"][c] = {
                 "event_name": block.get("event_name"),
@@ -105,6 +112,21 @@ def _prune(name: str, payloads: dict, course: str | None) -> dict:
         rows = payloads["flask_data"][0]["data"]
         rows = [{k: r[k] for k in keep if k in r} for r in rows]
         return {"flask_data": [{"data": rows}]}
+    if name == "course_table":
+        rows = payloads["reload_data"]["data"]
+        wanted = {course} if course else None
+        keep = [r for r in rows if wanted is None or r.get("course_name") in wanted]
+        return {"reload_data": {"data": keep}}
+    if name == "course_history":
+        d = payloads["reload_data"]
+        return {
+            "reload_data": {
+                "course_name": d.get("course_name"),
+                "course_num": d.get("course_num"),
+                "max_adjust": d.get("max_adjust"),
+                "table_data": [r for r in d["table_data"] if r.get("in_field")],
+            }
+        }
     if name == "fantasy":
         block_keys = ("constants", "data")
         out = {
@@ -340,6 +362,157 @@ def finish_probability_vectors(
     return out
 
 
+@dataclass(frozen=True)
+class CourseProfile:
+    """How a course has actually played, measured rather than assumed."""
+
+    name: str
+    par: int
+    yardage: float
+    score_to_par: float             # per round, field-adjusted
+    par_3_score: float              # per hole, relative to par
+    par_4_score: float
+    par_5_score: float
+    driving_distance: float         # field-adjusted yards off the tee
+    driving_accuracy: float         # fairways hit
+    fairway_width: float            # yards
+    rough_penalty: float            # strokes lost for missing the fairway
+    rough_penalty_rank: float       # among tour courses, 1 = most penal
+    green_in_regulation: float
+    raw: dict
+
+
+def load_course_table(
+    course: str, *, offline: bool = False, max_age: float = 604800.0
+) -> CourseProfile:
+    """Measured playing characteristics for one course.
+
+    This is the closest thing to ground truth about a venue on the free
+    pages: field-adjusted scoring by par type, how far and straight the tee
+    shots went, how wide the fairways were and what missing them cost. For
+    Bellerive it is the 2018 PGA Championship, the last time the tour was
+    here.
+    """
+    payloads = _page("course_table", offline=offline, max_age=max_age)
+    rows = payloads["reload_data"]["data"]  # type: ignore[index]
+    match = next((r for r in rows if r.get("course_name") == course), None)
+    if match is None:
+        raise KeyError(f"{course!r} not in the course table")
+    return CourseProfile(
+        name=course,
+        par=int(match["par"]),
+        yardage=float(match["yardage"]),
+        score_to_par=float(match["adj_score_to_par"]),
+        par_3_score=float(match["adj_par_3_score"]),
+        par_4_score=float(match["adj_par_4_score"]),
+        par_5_score=float(match["adj_par_5_score"]),
+        driving_distance=float(match["adj_driving_distance"]),
+        driving_accuracy=float(match["adj_driving_accuracy"]),
+        fairway_width=float(match["fw_width"]),
+        rough_penalty=float(match["rgh_diff"]),
+        rough_penalty_rank=float(match["rgh_diff_rank"]),
+        green_in_regulation=float(match["adj_gir"]),
+        raw=dict(match),
+    )
+
+
+@dataclass(frozen=True)
+class CourseHistory:
+    dg_id: int
+    name: str
+    rounds: int
+    mean_residual_sg: float     # strokes gained here beyond what was expected
+    adjustment: float           # DataGolf's shrunk estimate, strokes per round
+    finishes: dict[str, str]
+
+
+def load_course_history(
+    *, offline: bool = False, max_age: float = 86400.0
+) -> tuple[dict[str, CourseHistory], float]:
+    """Per-golfer history at this week's course, already shrunk.
+
+    Returns the adjustments and the cap DataGolf puts on them. The cap is the
+    interesting number: it is what stops four rounds from eight years ago
+    being mistaken for information.
+    """
+    payloads = _page("course_history", offline=offline, max_age=max_age)
+    d = payloads["reload_data"]
+    out: dict[str, CourseHistory] = {}
+    for r in d["table_data"]:  # type: ignore[index]
+        name = r["player_name"]
+        finishes = {k: v for k, v in r.items() if k.isdigit()}
+        out[normalize_name(name)] = CourseHistory(
+            dg_id=int(r.get("dg_id") or 0),
+            name=name,
+            rounds=int(r.get("count") or 0),
+            mean_residual_sg=float(r.get("mean_res_sg") or 0.0),
+            adjustment=float(r.get("suggested_adjustment") or 0.0),
+            finishes=finishes,
+        )
+    return out, float(d.get("max_adjust") or 0.0)
+
+
+def load_course_coefficients(
+    course: str, *, offline: bool = False, max_age: float = 21600.0
+) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """A course's skill weights, the tour average, and the course's percentile.
+
+    The weights say which parts of the game a venue rewards. What matters for
+    a fit is the *difference* from the average course, because a golfer's
+    overall rating already prices what he does everywhere.
+    """
+    payloads = _page("course_fit", offline=offline, max_age=max_age)
+    data = payloads["reload_data"]
+    if course not in data:  # type: ignore[operator]
+        raise KeyError(f"{course!r} not on the course-fit tool")
+    coefs = {c["axis"]: float(c["value"]) for c in data[course]["coefs"]}  # type: ignore[index]
+    rel = {c["axis"]: float(c["value"]) for c in data[course].get("coefs_rel", [])}  # type: ignore[index]
+    avg = {c["axis"]: float(c["value"]) for c in data.get("Avg PGA Tour Course", [])}  # type: ignore[union-attr]
+    return coefs, avg, rel
+
+
 def load_weather(*, offline: bool = False, max_age: float = 1800.0) -> dict:
     payloads = _page("fantasy", offline=offline, max_age=max_age)
     return payloads.get("hourly", {})  # type: ignore[return-value]
+
+
+@dataclass(frozen=True)
+class TeeTime:
+    name: str
+    dg_id: int
+    time: str        # local, as published, e.g. "9:47 AM"
+    minutes: int     # minutes past midnight, for sorting
+    round_number: int
+
+
+def load_tee_times(*, offline: bool = False, max_age: float = 1800.0) -> list[TeeTime]:
+    """First-round tee times, by name, for the whole field.
+
+    These come off the weather widget rather than the projections table, and
+    that is not an accident of convenience: the projections table masks both
+    the name and the tee time outside DataGolf's visible top five, while the
+    weather payload carries the full field unmasked because it is feeding a
+    map rather than a paywalled column. It is the only place on the free
+    pages where a golfer's tee time and his name appear together.
+    """
+    hourly = load_weather(offline=offline, max_age=max_age)
+    out = []
+    for day in hourly.get("active_days", []):
+        key = day.lower()
+        for p in hourly.get("players", []):
+            raw = p.get(f"{key}-time")
+            hour = p.get(f"{key}-hour")
+            if not raw or raw == "-" or hour in (None, ""):
+                continue
+            hhmm = int(hour)
+            minutes = (hhmm // 100) * 60 + hhmm % 100
+            out.append(
+                TeeTime(
+                    name=str(p["player_name"]),
+                    dg_id=int(p.get("dg_id") or 0),
+                    time=str(raw),
+                    minutes=minutes,
+                    round_number=int(p.get(f"{key}-round") or 1),
+                )
+            )
+    return sorted(out, key=lambda t: (t.round_number, t.minutes, t.name))

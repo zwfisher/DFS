@@ -10,6 +10,7 @@ import numpy as np
 from .data import datagolf as dg
 from .data import dk
 from .data.ids import NameIndex
+from .projections.coursefit import ArchetypeFit, build_fits
 
 
 @dataclass(frozen=True)
@@ -18,12 +19,15 @@ class Golfer:
     name: str
     salary: int
     skill: float           # true talent, strokes gained per round
-    course_fit: float      # strokes per round, course-specific
+    course_fit: float      # strokes per round, course fit plus course history
     wave: int              # 0 / 1 tee wave; rounds 1 and 2 alternate
     ownership: float       # projected, percent of lineups
     dg_score_sd: float | None = None    # DataGolf's projected DK-score SD
     dg_points: float | None = None      # DataGolf's projected DK points, if visible
     dg_finish_points: float | None = None
+    tee_slot: int = 0                   # position on the first-round tee sheet, 0 = earliest
+    tee_time: str = ""                  # local, as published
+    fit_detail: ArchetypeFit | None = None   # the course fit, broken out by skill
 
     @property
     def talent(self) -> float:
@@ -67,6 +71,10 @@ class Slate:
         return np.array([g.wave for g in self.golfers], dtype=np.int8)
 
     @property
+    def tee_slots(self) -> np.ndarray:
+        return np.array([g.tee_slot for g in self.golfers], dtype=np.int64)
+
+    @property
     def ownership(self) -> np.ndarray:
         return np.array([g.ownership for g in self.golfers], dtype=float)
 
@@ -102,10 +110,26 @@ def build_slate(
         players = dk.load_draftables(contest.draft_group, offline=offline)
 
     ranks = NameIndex((r.name, r) for r in dg.load_rankings(offline=offline).values())
-    raw_fits, fit_meta = dg.load_course_fit(course, offline=offline)
-    fits = NameIndex((f.name, f) for f in raw_fits.values())
+    _, fit_meta = dg.load_course_fit(course, offline=offline)
     rows, consts = dg.load_fantasy_projections(slate_name, offline=offline)
     by_dk_id = {r.dk_id: r for r in rows}
+
+    # Course fit is rebuilt from the venue's skill weights rather than taken
+    # off DataGolf's summary column, so the answer can be broken out by which
+    # part of a golfer's game is earning it. Course history rides along.
+    fits = NameIndex(
+        (f.name, f) for f in build_fits([p.name for p in players], course, offline=offline).values()
+    )
+
+    # First-round tee times, which the weather widget carries unmasked for the
+    # whole field. Slot 0 is the earliest group off.
+    try:
+        tee_times = dg.load_tee_times(offline=offline)
+    except (KeyError, OSError):
+        tee_times = []
+    tee_index = NameIndex((t.name, t) for t in tee_times)
+    ordered = sorted({t.minutes for t in tee_times})
+    slot_of_minute = {m: i for i, m in enumerate(ordered)}
 
     # A golfer with no DataGolf ranking is almost always a late qualifier with
     # a thin record. Fall back to the weakest ranked player in the field rather
@@ -120,6 +144,7 @@ def build_slate(
         rank = ranks.get(p.name)
         fit = fits.get(p.name)
         row = by_dk_id.get(p.draftable_id)
+        tee = tee_index.get(p.name)
         if rank is None:
             missing_skill.append(p.name)
         if fit is None:
@@ -132,7 +157,10 @@ def build_slate(
                 name=p.name,
                 salary=p.salary,
                 skill=rank.dg_skill if rank else fallback_skill,
-                course_fit=fit.fit if fit else 0.0,
+                course_fit=fit.total if fit else 0.0,
+                fit_detail=fit,
+                tee_slot=slot_of_minute.get(tee.minutes, 0) if tee else 0,
+                tee_time=tee.time if tee else "",
                 wave=row.wave if row else 0,
                 ownership=row.ownership if row else 0.0,
                 dg_score_sd=row.score_sd if row else None,

@@ -79,6 +79,33 @@ def points_by_category(par: int) -> np.ndarray:
     return np.array([eagle, HOLE_POINTS[-1], HOLE_POINTS[0], HOLE_POINTS[1], HOLE_POINTS[2]])
 
 
+def par_type_offsets(measured: dict[int, float], pars: tuple[int, ...]) -> dict[int, float]:
+    """How this course's par 3s, 4s and 5s differ from a typical tour hole.
+
+    `measured` is field-adjusted scoring relative to par, per hole, by par
+    type -- the numbers DataGolf publishes for a venue that has hosted. The
+    baseline is what `BASELINE_HOLE_PROBS` implies for a neutral hole.
+
+    The result is centred over the course's actual par mix, so it changes the
+    *shape* of scoring without touching the level. The level is the
+    calibration's job, and it is fitted against something better.
+
+    This matters more than it looks. Bellerive's par 5s gave up 0.10 strokes
+    less than a typical tour par 5 in 2018 -- they are long and they are not
+    the birdie holes the field is used to. Two holes a round times four
+    rounds of a materially lower birdie rate is worth more in DraftKings
+    points than the entire course-fit adjustment.
+    """
+    baseline = {
+        par: float((np.asarray(BASELINE_HOLE_PROBS[par]) / sum(BASELINE_HOLE_PROBS[par])
+                    * strokes_by_category(par)).sum())
+        for par in PARS
+    }
+    raw = {par: measured[par] - baseline[par] for par in measured}
+    level = float(np.mean([raw.get(p, 0.0) for p in pars]))
+    return {par: value - level for par, value in raw.items()}
+
+
 class HoleModel:
     """Per-hole cutpoints for a course, ready to be shifted and sampled.
 
@@ -86,12 +113,22 @@ class HoleModel:
     parameter that ties the golfer's talent, the hole difficulty offsets and
     the course-wide difficulty shift to the same scale, and it is solved for
     in projections.calibrate rather than assumed.
+
+    `par_offsets` carries how this venue's par 3s, 4s and 5s actually play
+    relative to a typical tour hole of that par; see `par_type_offsets`.
     """
 
-    def __init__(self, course: Course, latent_per_stroke: float, course_shift: float = 0.0):
+    def __init__(
+        self,
+        course: Course,
+        latent_per_stroke: float,
+        course_shift: float = 0.0,
+        par_offsets: dict[int, float] | None = None,
+    ):
         self.course = course
         self.latent_per_stroke = float(latent_per_stroke)
         self.course_shift = float(course_shift)
+        self.par_offsets = dict(par_offsets or {})
 
         n = len(course.pars)
         self.pars = np.asarray(course.pars, dtype=np.int64)
@@ -100,7 +137,11 @@ class HoleModel:
         # is what lets `sample` use one searchsorted per par type.
         self.base_tau = {par: cutpoints(par).astype(np.float32) for par in PARS}
         self.hole_adjust = np.array(
-            [self.course_shift - off * self.latent_per_stroke for off in course.hole_offsets],
+            [
+                self.course_shift
+                - (off + self.par_offsets.get(par, 0.0)) * self.latent_per_stroke
+                for off, par in zip(course.hole_offsets, course.pars)
+            ],
             dtype=np.float32,
         )
         self.holes_by_par = {
@@ -112,8 +153,8 @@ class HoleModel:
         self.strokes = np.empty((n, N_CATEGORIES))
         self.points = np.empty((n, N_CATEGORIES))
         for h, par in enumerate(course.pars):
-            offset = course.hole_offsets[h] * self.latent_per_stroke
-            self.tau[h] = cutpoints(par) - offset + self.course_shift
+            strokes_harder = course.hole_offsets[h] + self.par_offsets.get(par, 0.0)
+            self.tau[h] = cutpoints(par) - strokes_harder * self.latent_per_stroke + self.course_shift
             self.strokes[h] = strokes_by_category(par)
             self.points[h] = points_by_category(par)
 
