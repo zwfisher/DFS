@@ -8,10 +8,13 @@ one expensive golfer is forced cheap everywhere else. That joint structure
 is what decides whether being 20% on a golfer is contrarian or chalky, and
 the only way to see it is to build the field.
 
-Lineups are drawn by weighted sampling without replacement -- Gumbel top-k,
-which vectorizes -- and then filtered to the salary window real entries
-live in. The filter distorts the marginals, so the sampling weights are
-re-fitted until the field's realised ownership matches the projection.
+Lineups are drawn one golfer at a time, weighted by ownership, with the
+golfers who would strand the remaining budget dropped before each pick.
+Conditioning on the cap as it goes -- rather than sampling freely and
+filtering afterwards -- is what makes the field buildable at all here; see
+`_sample_lineups`. The conditioning still distorts the marginals, so the
+sampling weights are re-fitted until the field's realised ownership matches
+the projection.
 """
 
 from __future__ import annotations
@@ -46,12 +49,6 @@ class Field:
             block = self.lineups[lo : lo + chunk]
             out[:, lo : lo + chunk] = points[:, block].sum(axis=2)
         return out
-
-
-def _raw_picks(log_w: np.ndarray, n: int, rng: np.random.Generator) -> np.ndarray:
-    """Gumbel top-k: weighted sampling without replacement, in one shot."""
-    keys = log_w + rng.gumbel(size=(n, len(log_w)))
-    return np.argpartition(-keys, ROSTER_SIZE, axis=1)[:, :ROSTER_SIZE]
 
 
 def _sample_lineups(

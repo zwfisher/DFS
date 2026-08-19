@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..config import ROSTER_SIZE, PortfolioConfig
+from ..config import PortfolioConfig
 from .contest import ContestEvaluator
 
 _CHUNK = 64

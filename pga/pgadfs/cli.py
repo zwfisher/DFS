@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from . import pipeline
-from .config import BELLERIVE, Config
+from .config import Config
 from .data import datagolf as dg
 from .data.cache import fetch_json, save_fixture
 from .data.dk import CONTEST_URL, DRAFTABLES_URL
