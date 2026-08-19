@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pgadfs"
+version = "0.1.0"
+description = "PGA DFS projections, hole-by-hole simulation, ownership and lineup optimization for DraftKings"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "ortools>=9.10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+pgadfs = "pgadfs.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pgadfs*"]
+
+[tool.setuptools.package-data]
+pgadfs = ["data/fixtures/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
