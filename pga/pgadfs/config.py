@@ -312,6 +312,14 @@ class PortfolioConfig:
     # the full simulation is for.
     roi_sims: int = 4_000
 
+    # Candidates are built on one block of simulations, cut down to a
+    # shortlist on a second, and finally chosen on a third. Two blocks are
+    # not enough: picking the best of several hundred candidates on the same
+    # draws that price them is a selection step, and it inflates whatever it
+    # selects. `shortlist_factor` sets how many survive the middle stage per
+    # lineup entered.
+    shortlist_factor: int = 8
+
     # Width of the multiplicative window the payout curve is smoothed over
     # before lineups are ranked on it; see Payouts.smoothed. 1.0 disables it.
     payout_smoothing: float = 2.0

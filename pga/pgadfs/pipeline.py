@@ -219,20 +219,17 @@ def run(
         projection=sim.points.mean(axis=0),
     )
 
-    # Candidate lineups are *built* on one set of simulations and *priced* on
-    # another. Without the split, a lineup that happens to look good on the
-    # draws it was optimised against gets to be evaluated on those same
-    # draws, and every ROI comes back inflated -- the same overfitting a
-    # backtest suffers when it tunes and tests on one sample.
+    # Every stage that *chooses* gets its own block of simulations, and the
+    # block that reports gets one nobody chose on. Three choosing stages --
+    # building the pool, cutting it to a shortlist, picking the portfolio --
+    # so four blocks. Sharing them is not a small sin: selecting the best of
+    # several hundred candidates on the draws that price them inflates
+    # whatever it selects, and the more candidates the worse it gets.
     split = np.random.default_rng(cfg.portfolio.seed)
     order = split.permutation(sim.points.shape[0])
-    take = min(cfg.portfolio.roi_sims, len(order) // 2)
-    build_points = sim.points[order[take : 2 * take]]
-    roi_points = sim.points[order[:take]]
-
-    evaluator = ContestEvaluator(
-        field.scores(roi_points), payouts, smoothing=cfg.portfolio.payout_smoothing
-    )
+    take = min(cfg.portfolio.roi_sims, len(order) // 4)
+    blocks = [sim.points[order[i * take : (i + 1) * take]] for i in range(4)]
+    build_points, shortlist_points, roi_points, report_points = blocks
 
     candidates = candidate_pool(
         build_points,
@@ -241,18 +238,32 @@ def run(
         min_salary=cfg.portfolio.min_salary_used,
         rng=split,
     )
+
+    keep = min(len(candidates), max(40, cfg.portfolio.n_lineups * cfg.portfolio.shortlist_factor))
+    if keep < len(candidates):
+        shortlist_eval = ContestEvaluator(
+            field.scores(shortlist_points), payouts, smoothing=cfg.portfolio.payout_smoothing
+        )
+        pool = np.asarray(candidates)
+        roi = shortlist_eval.roi(shortlist_points[:, pool].sum(axis=2))
+        candidates = [candidates[i] for i in np.argsort(-roi)[:keep]]
+        del shortlist_eval
+
+    evaluator = ContestEvaluator(
+        field.scores(roi_points), payouts, smoothing=cfg.portfolio.payout_smoothing
+    )
     portfolio = select_portfolio(candidates, roi_points, evaluator, cfg.portfolio)
 
     # The honest number. Selection maximised ROI on `roi_points`, so the ROI
     # it reports there is an upward-biased estimate of its own objective. The
-    # same lineups priced on simulations they were never selected against is
-    # the estimate to believe -- and the gap between the two is a direct
-    # readout of how much of the edge was noise.
+    # same lineups priced on simulations no stage ever looked at is the
+    # estimate to believe -- and the gap between the two is a direct readout
+    # of how much of the edge was noise.
     holdout = ContestEvaluator(
-        field.scores(build_points), payouts, smoothing=cfg.portfolio.payout_smoothing
+        field.scores(report_points), payouts, smoothing=cfg.portfolio.payout_smoothing
     )
     entered = np.asarray(portfolio.lineups)
-    holdout_roi = float(holdout.roi(build_points[:, entered].sum(axis=2)).mean())
+    holdout_roi = float(holdout.roi(report_points[:, entered].sum(axis=2)).mean())
     del holdout
 
     return RunResult(
